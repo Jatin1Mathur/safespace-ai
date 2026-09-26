@@ -79,6 +79,9 @@ def query_medgemma(prompt: str) -> str:
 
 # ── 3. Emergency call ────────────────────────────────────────────────────────
 def call_emergency() -> str:
+    if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER, EMERGENCY_CONTACT]):
+        return ("Emergency calling is disabled in this demo. If you are in danger, "
+                "please call 112 (EU) or your local emergency number right now.")
     try:
         client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
         call = client.calls.create(

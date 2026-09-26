@@ -1,9 +1,10 @@
+import os
 from datetime import datetime
 
 import gradio as gr
 import requests
 
-BACKEND_URL = "http://localhost:8000/ask"
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000/ask")
 
 GENERAL_SERVICE_MESSAGE = (
     "The assistant service is starting or temporarily unavailable. "
@@ -55,7 +56,7 @@ def is_technical_error_message(text: str) -> bool:
 
 def call_backend(message: str) -> tuple[str, str, str, str]:
     try:
-        res = requests.post(BACKEND_URL, json={"message": message}, timeout=60)
+        res = requests.post(BACKEND_URL, json={"message": message}, timeout=300)
         res.raise_for_status()
         data = res.json()
 
