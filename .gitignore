@@ -10,3 +10,6 @@ wheels/
 .venv
 
 .env
+
+# Private chat and mood data
+backend/session_memory.json

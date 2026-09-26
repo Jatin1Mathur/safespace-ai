@@ -1,3 +1,6 @@
+import warnings
+warnings.filterwarnings("ignore")
+
 from langchain.tools import tool
 from tools import query_medgemma, call_emergency, find_clinics_by_city, find_pharmacies, get_crisis_hotlines, get_breathing_exercise, get_sleep_advice
 
@@ -80,7 +83,6 @@ def sleep_advice_tool() -> str:
     return get_sleep_advice()
 
 
-# Create AI Agent using Ollama
 from langchain_ollama import ChatOllama
 from langgraph.prebuilt import create_react_agent
 

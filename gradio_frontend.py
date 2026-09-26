@@ -1,12 +1,56 @@
-"""
-SafeSpace AI - Desktop Professional UI
-"""
+from datetime import datetime
 
 import gradio as gr
 import requests
-from datetime import datetime
 
 BACKEND_URL = "http://localhost:8000/ask"
+
+GENERAL_SERVICE_MESSAGE = (
+    "The assistant service is starting or temporarily unavailable. "
+    "Please try again in a moment."
+)
+
+TECHNICAL_ERROR_KEYWORDS = [
+    "twilio",
+    "traceback",
+    "exception",
+    "connectionerror",
+    "httperror",
+    "api error",
+    "system start error",
+    "backend error",
+    "failed to start",
+    "localhost",
+    "python main.py",
+    "internal server error",
+    "500",
+]
+
+
+MOOD_EMOJI = {
+    "anxious": "😟",
+    "depressed": "😔",
+    "angry": "😠",
+    "lonely": "💙",
+    "stressed": "😰",
+    "happy": "😊",
+    "neutral": "😐",
+}
+
+RISK_META = {
+    "HIGH": ("High Risk", "risk-high", "Immediate support recommended"),
+    "MEDIUM": ("Medium Risk", "risk-medium", "Monitor closely"),
+    "LOW": ("Low Risk", "risk-low", "Supportive guidance"),
+    "NONE": ("No Risk", "risk-none", "Normal support mode"),
+}
+
+
+def is_technical_error_message(text: str) -> bool:
+    if not text:
+        return False
+
+    lower_text = str(text).lower()
+    return any(keyword in lower_text for keyword in TECHNICAL_ERROR_KEYWORDS)
 
 
 def call_backend(message: str) -> tuple[str, str, str, str]:
@@ -14,599 +58,878 @@ def call_backend(message: str) -> tuple[str, str, str, str]:
         res = requests.post(BACKEND_URL, json={"message": message}, timeout=60)
         res.raise_for_status()
         data = res.json()
+
         response = data.get("response") or "I'm here to listen. Could you tell me more?"
         tool = data.get("tool_called", "None")
         mood = data.get("mood", "neutral")
         risk = data.get("risk", "NONE")
+
+        if is_technical_error_message(response):
+            response = GENERAL_SERVICE_MESSAGE
+            tool = "System"
+            mood = "neutral"
+            risk = "NONE"
+
+        if is_technical_error_message(tool):
+            tool = "System"
+
         return response, tool, mood, risk
+
     except requests.exceptions.ConnectionError:
-        return "⚠️ Backend is offline. Please run: `cd backend && python main.py`", "Error", "neutral", "NONE"
-    except Exception as e:
-        return f"Something went wrong: {str(e)}", "Error", "neutral", "NONE"
+        return GENERAL_SERVICE_MESSAGE, "System", "neutral", "NONE"
+
+    except requests.exceptions.Timeout:
+        return GENERAL_SERVICE_MESSAGE, "System", "neutral", "NONE"
+
+    except requests.exceptions.RequestException:
+        return GENERAL_SERVICE_MESSAGE, "System", "neutral", "NONE"
+
+    except Exception:
+        return GENERAL_SERVICE_MESSAGE, "System", "neutral", "NONE"
 
 
-MOOD_EMOJI = {
-    "anxious": "😟", "depressed": "😔", "angry": "😠",
-    "lonely": "💙", "stressed": "😰", "happy": "😊",
-    "neutral": "😐"
-}
+def make_risk_badge(risk: str) -> str:
+    label, class_name, helper = RISK_META.get(risk, RISK_META["NONE"])
 
-RISK_COLOR = {
-    "HIGH": "#dc2626", "MEDIUM": "#d97706", "LOW": "#2563eb", "NONE": "#16a34a"
-}
+    return f"""
+    <div class="risk-badge {class_name}">
+        <div>
+            <span class="risk-dot"></span>
+            <strong>{label}</strong>
+        </div>
+        <small>{helper}</small>
+    </div>
+    """
 
 
-def chat(user_message: str, history: list, tool_log: str, mood_display: str, session_stats: str):
-    if not user_message.strip():
-        return history, "", tool_log, mood_display, session_stats
+def chat(
+    user_message: str,
+    history: list,
+    tool_log: str,
+    mood_display: str,
+    session_stats: str,
+    risk_status: str,
+):
+    if not user_message or not user_message.strip():
+        return history, "", tool_log, mood_display, session_stats, risk_status
 
-    response, tool_called, mood, risk = call_backend(user_message)
+    response, tool_called, mood, risk = call_backend(user_message.strip())
+
     history = history or []
-    history.append({"role": "user", "content": user_message})
-    history.append({"role": "assistant", "content": response})
+
+    history.append(
+        {
+            "role": "user",
+            "content": user_message.strip(),
+        }
+    )
+
+    history.append(
+        {
+            "role": "assistant",
+            "content": response,
+        }
+    )
 
     timestamp = datetime.now().strftime("%H:%M:%S")
-    tool_log = f"[{timestamp}] Tool: {tool_called} | Mood: {mood} | Risk: {risk}\n" + tool_log
+    tool_log = (
+        f"[{timestamp}] Agent: {tool_called} | Mood: {mood} | Risk: {risk}\n"
+        + (tool_log or "")
+    )
 
     emoji = MOOD_EMOJI.get(mood, "😐")
     mood_display = f"{emoji} {mood.capitalize()}"
 
-    # Update session stats
-    msg_count = len([m for m in history if m["role"] == "user"])
-    session_stats = f"Messages: {msg_count} · Risk: {risk} · Tool: {tool_called}"
+    msg_count = len(history) // 2
+    session_stats = f"Messages: {msg_count}\nRisk: {risk}\nAgent: {tool_called}"
+    risk_status = make_risk_badge(risk)
 
-    return history, "", tool_log, mood_display, session_stats
+    return history, "", tool_log, mood_display, session_stats, risk_status
 
 
 def clear_chat():
-    return [], "", "", "😐 Neutral", "Messages: 0"
+    return (
+        [],
+        "",
+        "",
+        "😐 Neutral",
+        "Messages: 0\nRisk: NONE\nAgent: None",
+        make_risk_badge("NONE"),
+    )
 
 
 CSS = """
-@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Outfit:wght@200;300;400;500;600&family=JetBrains+Mono:wght@300;400&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Playfair+Display:wght@600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
 :root {
-    --bg: #0e1117;
-    --bg-panel: #141920;
-    --bg-card: #1a2230;
-    --bg-input: #1e2738;
-    --border: #2a3448;
-    --border-light: #1e2a3a;
-    --text: #e8eef8;
-    --text-sub: #8494b0;
-    --text-muted: #4a5878;
-    --green: #10b981;
-    --green-dim: #064e35;
-    --green-glow: rgba(16,185,129,0.15);
-    --blue: #3b82f6;
-    --blue-dim: #1e3a6e;
-    --red: #ef4444;
-    --red-dim: #4a1010;
+    --page: #07110f;
+    --page-2: #0b141f;
+    --panel: rgba(17, 24, 39, 0.78);
+    --panel-strong: rgba(15, 23, 42, 0.95);
+    --card: rgba(20, 31, 45, 0.72);
+    --card-hover: rgba(25, 39, 56, 0.92);
+    --input: rgba(8, 15, 27, 0.9);
+    --border: rgba(148, 163, 184, 0.14);
+    --border-strong: rgba(16, 185, 129, 0.35);
+    --text: #edf7f4;
+    --text-soft: #b8c7d9;
+    --muted: #77879f;
+    --muted-2: #536178;
+    --green: #22c55e;
+    --green-2: #10b981;
+    --mint: #7dd3fc;
+    --blue: #60a5fa;
     --amber: #f59e0b;
-    --amber-dim: #4a3010;
-    --accent: #10b981;
-    --radius: 12px;
-    --radius-lg: 18px;
-    --shadow: 0 4px 24px rgba(0,0,0,0.4);
-    --shadow-lg: 0 8px 48px rgba(0,0,0,0.6);
-    --glow: 0 0 40px rgba(16,185,129,0.08);
+    --red: #f43f5e;
+    --radius: 22px;
+    --radius-sm: 14px;
+    --shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
+    --glow: 0 0 80px rgba(16, 185, 129, 0.13);
 }
 
-*, *::before, *::after { box-sizing: border-box; }
+* {
+    box-sizing: border-box;
+}
 
-body, .gradio-container {
-    font-family: 'Outfit', sans-serif !important;
-    background: var(--bg) !important;
+body,
+.gradio-container {
+    font-family: 'Inter', sans-serif !important;
+    background:
+        radial-gradient(circle at top left, rgba(34, 197, 94, 0.18), transparent 32rem),
+        radial-gradient(circle at 85% 15%, rgba(96, 165, 250, 0.16), transparent 28rem),
+        linear-gradient(135deg, var(--page), var(--page-2)) !important;
     color: var(--text) !important;
     min-height: 100vh;
 }
 
 .gradio-container {
-    max-width: 1200px !important;
+    max-width: 1320px !important;
     margin: 0 auto !important;
-    padding: 0 24px 40px !important;
+    padding: 26px 26px 40px !important;
 }
 
-/* ── Top nav bar ── */
-.ss-navbar {
+footer,
+.api-docs {
+    display: none !important;
+}
+
+.ss-shell {
+    position: relative;
+}
+
+.ss-shell::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+    background-size: 48px 48px;
+    mask-image: linear-gradient(to bottom, rgba(0,0,0,0.6), transparent 70%);
+}
+
+.ss-header {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 24px;
+    align-items: center;
+    padding: 20px;
+    border: 1px solid var(--border);
+    border-radius: 28px;
+    background: linear-gradient(135deg, rgba(15,23,42,0.92), rgba(16,36,35,0.72));
+    box-shadow: var(--shadow), var(--glow);
+    backdrop-filter: blur(18px);
+    margin-bottom: 22px;
+}
+
+.brand-row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 18px 0 16px;
-    border-bottom: 1px solid var(--border-light);
-    margin-bottom: 24px;
+    gap: 16px;
 }
 
-.ss-brand {
+.brand-icon {
+    width: 54px;
+    height: 54px;
+    display: grid;
+    place-items: center;
+    border-radius: 18px;
+    background: linear-gradient(135deg, #064e3b, #10b981 62%, #7dd3fc);
+    box-shadow: 0 18px 45px rgba(16, 185, 129, 0.32);
+    font-size: 1.5rem;
+}
+
+.brand-title {
+    font-family: 'Playfair Display', serif;
+    font-size: clamp(1.65rem, 3vw, 2.35rem);
+    line-height: 1;
+    letter-spacing: -0.04em;
+    margin: 0;
+}
+
+.brand-title span {
+    color: var(--green);
+}
+
+.brand-subtitle {
+    margin-top: 8px;
+    color: var(--text-soft);
+    font-size: 0.86rem;
+}
+
+.status-strip {
     display: flex;
-    align-items: center;
-    gap: 12px;
+    gap: 9px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
 }
 
-.ss-brand-icon {
-    width: 38px;
-    height: 38px;
-    background: linear-gradient(135deg, #064e35, #10b981);
-    border-radius: 10px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 18px;
-    box-shadow: 0 4px 12px rgba(16,185,129,0.3);
-}
-
-.ss-brand-name {
-    font-family: 'Playfair Display', serif !important;
-    font-size: 1.4rem !important;
-    font-weight: 700 !important;
-    color: var(--text) !important;
-    letter-spacing: -0.3px;
-}
-
-.ss-brand-name span {
-    color: var(--green) !important;
-}
-
-.ss-brand-tag {
-    font-size: 0.65rem !important;
-    color: var(--text-muted) !important;
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-    font-weight: 300 !important;
-    margin-top: 2px;
-}
-
-.ss-nav-chips {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-}
-
-.ss-nav-chip {
+.status-pill {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    padding: 5px 12px;
-    border-radius: 20px;
-    font-size: 0.68rem;
-    font-weight: 400;
-    letter-spacing: 0.05em;
-    border: 1px solid;
+    gap: 7px;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-soft);
+    background: rgba(255, 255, 255, 0.045);
+    font-size: 0.76rem;
+    font-weight: 600;
 }
 
-.nc-green { background: var(--green-glow); border-color: #064e35; color: var(--green); }
-.nc-blue  { background: rgba(59,130,246,0.1); border-color: var(--blue-dim); color: var(--blue); }
-.nc-red   { background: rgba(239,68,68,0.08); border-color: var(--red-dim); color: var(--red); }
-
-.nc-dot {
-    width: 5px; height: 5px;
+.status-pill::before {
+    content: '';
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
     background: currentColor;
-    animation: pulse 2s infinite;
+    box-shadow: 0 0 14px currentColor;
 }
 
-@keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
+.pill-green {
+    color: var(--green);
 }
 
-/* ── Desktop 2-column layout ── */
-.ss-layout {
-    display: grid;
-    grid-template-columns: 1fr 300px;
-    gap: 20px;
-    align-items: start;
+.pill-blue {
+    color: var(--blue);
 }
 
-/* ── Left: main chat area ── */
-.ss-main {}
+.pill-red {
+    color: var(--red);
+}
 
-/* ── Quick prompts ── */
-.ss-quickbar {
+.hero-card {
+    margin-bottom: 18px;
+    padding: 18px 20px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: linear-gradient(135deg, rgba(16,185,129,0.10), rgba(96,165,250,0.05));
+}
+
+.hero-card h2 {
+    margin: 0 0 8px;
+    font-size: 1.08rem;
+    letter-spacing: -0.02em;
+}
+
+.hero-card p {
+    margin: 0;
+    color: var(--text-soft);
+    line-height: 1.55;
+    font-size: 0.9rem;
+}
+
+.app-grid {
+    align-items: flex-start !important;
+    gap: 18px !important;
+}
+
+.main-panel,
+.side-panel {
+    min-width: 0 !important;
+}
+
+.side-panel {
+    position: sticky;
+    top: 18px;
+}
+
+.quickbar {
     display: flex;
-    gap: 8px;
+    gap: 9px;
     flex-wrap: wrap;
-    margin-bottom: 14px;
+    margin: 0 0 14px;
 }
 
-.ss-qbtn {
-    background: var(--bg-card) !important;
-    color: var(--text-sub) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 20px !important;
-    font-size: 0.72rem !important;
-    font-weight: 400 !important;
-    padding: 5px 14px !important;
-    cursor: pointer !important;
-    transition: all 0.18s ease !important;
-    font-family: 'Outfit', sans-serif !important;
-    white-space: nowrap;
+.quick-btn {
+    border: 1px solid var(--border);
+    color: var(--text-soft);
+    background: rgba(255,255,255,0.045);
+    border-radius: 999px;
+    padding: 9px 13px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: 180ms ease;
 }
 
-.ss-qbtn:hover {
-    background: var(--green-glow) !important;
-    border-color: #064e35 !important;
-    color: var(--green) !important;
+.quick-btn:hover {
+    color: white;
+    border-color: var(--border-strong);
+    background: rgba(16, 185, 129, 0.12);
     transform: translateY(-1px);
 }
 
-/* ── Chat window ── */
 #chatbot {
-    background: var(--bg-panel) !important;
     border: 1px solid var(--border) !important;
-    border-radius: var(--radius-lg) !important;
-    box-shadow: var(--shadow), var(--glow) !important;
+    background: linear-gradient(180deg, rgba(15,23,42,0.74), rgba(8,13,24,0.94)) !important;
+    border-radius: 26px !important;
+    box-shadow: var(--shadow) !important;
+    overflow: hidden !important;
 }
 
-/* ── Input panel ── */
-.ss-input-wrap {
+#chatbot .message,
+#chatbot .bubble {
+    border-radius: 18px !important;
+    line-height: 1.55 !important;
+}
+
+.input-card {
     margin-top: 14px;
-    background: var(--bg-input);
+    padding: 12px;
     border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    overflow: hidden;
-    transition: border-color 0.2s, box-shadow 0.2s;
+    border-radius: 26px;
+    background: rgba(5, 11, 20, 0.78);
+    box-shadow: 0 18px 50px rgba(0,0,0,0.28);
 }
 
-.ss-input-wrap:focus-within {
-    border-color: var(--green);
-    box-shadow: 0 0 0 3px var(--green-glow);
+.input-card:focus-within {
+    border-color: var(--border-strong);
+    box-shadow: 0 0 0 4px rgba(16,185,129,0.10), 0 18px 50px rgba(0,0,0,0.28);
 }
 
-#msg-input {
-    background: transparent !important;
-    border: none !important;
-    box-shadow: none !important;
-}
-
+#msg-input,
 #msg-input textarea {
     background: transparent !important;
     border: none !important;
+    box-shadow: none !important;
     color: var(--text) !important;
-    font-family: 'Outfit', sans-serif !important;
-    font-size: 0.95rem !important;
-    font-weight: 300 !important;
-    line-height: 1.7 !important;
-    padding: 16px 18px 8px !important;
-    resize: none !important;
-    min-height: 90px !important;
+    font-family: 'Inter', sans-serif !important;
+    font-size: 0.98rem !important;
+    line-height: 1.65 !important;
+}
+
+#msg-input textarea {
+    min-height: 86px !important;
+    padding: 6px 8px 8px !important;
 }
 
 #msg-input textarea::placeholder {
-    color: var(--text-muted) !important;
-    font-style: italic;
+    color: var(--muted) !important;
 }
 
-#msg-input textarea:focus {
-    outline: none !important;
-    box-shadow: none !important;
-}
-
-.ss-input-bar {
+.input-actions {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 10px 14px 12px;
-    border-top: 1px solid var(--border-light);
+    gap: 10px;
+    border-top: 1px solid var(--border);
+    padding-top: 11px;
 }
 
-.ss-input-hint {
-    font-size: 0.68rem;
-    color: var(--text-muted);
-    font-weight: 300;
+.input-hint {
+    color: var(--muted);
     font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    margin-right: auto;
+}
+
+#send-btn,
+#clear-btn {
+    border-radius: 14px !important;
+    font-weight: 800 !important;
+    min-height: 42px !important;
+    border: none !important;
+    transition: 180ms ease !important;
 }
 
 #send-btn {
-    background: linear-gradient(135deg, #059669, #10b981) !important;
-    color: white !important;
-    border: none !important;
-    border-radius: 8px !important;
-    font-family: 'Outfit', sans-serif !important;
-    font-weight: 500 !important;
-    font-size: 0.85rem !important;
-    padding: 9px 28px !important;
-    cursor: pointer !important;
-    transition: all 0.18s ease !important;
-    letter-spacing: 0.04em;
-    box-shadow: 0 2px 12px rgba(16,185,129,0.35) !important;
+    background: linear-gradient(135deg, #10b981, #22c55e) !important;
+    color: #03140e !important;
+    box-shadow: 0 12px 28px rgba(16,185,129,0.28) !important;
 }
 
-#send-btn:hover {
+#send-btn:hover,
+#clear-btn:hover {
     transform: translateY(-1px) !important;
-    box-shadow: 0 4px 20px rgba(16,185,129,0.5) !important;
 }
 
 #clear-btn {
-    background: transparent !important;
-    color: var(--text-muted) !important;
+    background: rgba(255,255,255,0.07) !important;
+    color: var(--text-soft) !important;
     border: 1px solid var(--border) !important;
-    border-radius: 8px !important;
-    font-family: 'Outfit', sans-serif !important;
-    font-size: 0.82rem !important;
-    padding: 9px 18px !important;
-    cursor: pointer !important;
-    transition: all 0.18s ease !important;
 }
 
-#clear-btn:hover {
-    border-color: var(--text-muted) !important;
-    color: var(--text-sub) !important;
-}
-
-/* ── Right sidebar ── */
-.ss-sidebar {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    position: sticky;
-    top: 20px;
-}
-
-.ss-card {
-    background: var(--bg-card);
+.side-card {
     border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 16px;
-    box-shadow: var(--shadow);
+    border-radius: 24px;
+    background: var(--card);
+    backdrop-filter: blur(16px);
+    padding: 18px;
+    margin-bottom: 14px;
+    box-shadow: 0 18px 45px rgba(0,0,0,0.23);
 }
 
-.ss-card-title {
-    font-size: 0.65rem;
-    font-weight: 500;
-    color: var(--text-muted);
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    margin-bottom: 12px;
+.card-title {
+    color: var(--muted);
     font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    margin-bottom: 12px;
 }
 
-/* Mood card */
-.ss-mood-display {
-    font-size: 1.8rem;
-    text-align: center;
-    padding: 8px 0 4px;
-    letter-spacing: -1px;
-}
-
-#mood-label {
+#mood-label,
+#session-stats,
+#tool-log {
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
-    text-align: center !important;
 }
 
-#mood-label textarea, #mood-label input {
+#mood-label input,
+#mood-label textarea {
     background: transparent !important;
-    border: none !important;
     color: var(--green) !important;
-    font-family: 'Outfit', sans-serif !important;
-    font-size: 1rem !important;
-    font-weight: 500 !important;
+    border: none !important;
     text-align: center !important;
-    padding: 4px 0 !important;
+    font-size: 1.55rem !important;
+    font-weight: 800 !important;
+    padding: 5px 0 !important;
 }
 
-/* Stats card */
-#session-stats {
-    background: transparent !important;
-    border: none !important;
-    box-shadow: none !important;
-}
-
-#session-stats textarea, #session-stats input {
-    background: transparent !important;
-    border: none !important;
-    color: var(--text-sub) !important;
-    font-family: 'JetBrains Mono', monospace !important;
-    font-size: 0.72rem !important;
-    padding: 0 !important;
-    line-height: 1.8 !important;
-}
-
-/* Disclaimer card */
-.ss-disclaimer-text {
-    font-size: 0.72rem;
-    color: var(--text-muted);
-    line-height: 1.6;
-    font-weight: 300;
-}
-
-.ss-disclaimer-text strong {
-    color: var(--amber);
-    font-weight: 500;
-}
-
-/* Tool log */
+#session-stats textarea,
 #tool-log textarea {
     background: transparent !important;
+    color: var(--text-soft) !important;
     border: none !important;
-    color: var(--text-muted) !important;
     font-family: 'JetBrains Mono', monospace !important;
-    font-size: 0.68rem !important;
-    line-height: 1.7 !important;
+    font-size: 0.76rem !important;
+    line-height: 1.75 !important;
+    padding: 0 !important;
 }
 
-/* Scrollbar */
-::-webkit-scrollbar { width: 3px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.risk-badge {
+    padding: 14px;
+    border-radius: 18px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,0.045);
+}
 
-/* Footer */
+.risk-badge > div {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+}
+
+.risk-badge strong {
+    font-size: 0.96rem;
+}
+
+.risk-badge small {
+    display: block;
+    margin-top: 6px;
+    color: var(--muted);
+    font-size: 0.75rem;
+}
+
+.risk-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 999px;
+    background: currentColor;
+    box-shadow: 0 0 18px currentColor;
+}
+
+.risk-none {
+    color: var(--green);
+}
+
+.risk-low {
+    color: var(--blue);
+}
+
+.risk-medium {
+    color: var(--amber);
+}
+
+.risk-high {
+    color: var(--red);
+}
+
+.disclaimer {
+    color: var(--text-soft);
+    line-height: 1.62;
+    font-size: 0.82rem;
+}
+
+.disclaimer strong {
+    color: var(--green);
+}
+
+.disclaimer .warn {
+    color: var(--amber);
+}
+
+.metric-list {
+    display: grid;
+    gap: 8px;
+}
+
+.metric {
+    display: flex;
+    justify-content: space-between;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 15px;
+    background: rgba(255,255,255,0.04);
+    color: var(--text-soft);
+    font-size: 0.8rem;
+}
+
+.metric b {
+    color: var(--text);
+}
+
 .ss-footer {
+    margin-top: 22px;
     text-align: center;
-    margin-top: 28px;
-    padding-top: 16px;
-    border-top: 1px solid var(--border-light);
+    color: var(--muted-2);
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 0.12em;
+    font-size: 0.68rem;
 }
 
-.ss-footer p {
-    font-size: 0.65rem !important;
-    color: var(--text-muted) !important;
-    font-family: 'JetBrains Mono', monospace !important;
-    letter-spacing: 0.08em;
+::-webkit-scrollbar {
+    width: 7px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgba(148,163,184,0.22);
+    border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(148,163,184,0.35);
+}
+
+@media (max-width: 980px) {
+    .gradio-container {
+        padding: 16px 14px 28px !important;
+    }
+
+    .ss-header {
+        grid-template-columns: 1fr;
+    }
+
+    .status-strip {
+        justify-content: flex-start;
+    }
+
+    .side-panel {
+        position: static;
+    }
+
+    .input-actions {
+        flex-wrap: wrap;
+    }
+
+    .input-hint {
+        width: 100%;
+    }
+}
+
+@media (max-width: 640px) {
+    .brand-row {
+        align-items: flex-start;
+    }
+
+    .brand-icon {
+        width: 46px;
+        height: 46px;
+        border-radius: 15px;
+    }
+
+    .quickbar {
+        overflow-x: auto;
+        flex-wrap: nowrap;
+        padding-bottom: 4px;
+    }
+
+    .quick-btn {
+        white-space: nowrap;
+    }
+
+    #chatbot {
+        height: 440px !important;
+    }
 }
 """
 
+
 with gr.Blocks(title="SafeSpace AI") as demo:
+    gr.HTML('<div class="ss-shell">')
 
-    # ── Navbar ──────────────────────────────────────────────────────────────
-    gr.HTML("""
-    <div class="ss-navbar">
-        <div class="ss-brand">
-            <div class="ss-brand-icon">🌿</div>
-            <div>
-                <div class="ss-brand-name">Safe<span>Space</span> AI</div>
-                <div class="ss-brand-tag">Mental Health · Medical Support</div>
+    gr.HTML(
+        """
+        <header class="ss-header">
+            <div class="brand-row">
+                <div class="brand-icon">🌿</div>
+                <div>
+                    <h1 class="brand-title">Safe<span>Space</span> AI</h1>
+                    <div class="brand-subtitle">
+                        A calm, guided support interface for mental-health conversations and medical assistance.
+                    </div>
+                </div>
             </div>
-        </div>
-        <div class="ss-nav-chips">
-            <span class="ss-nav-chip nc-green"><span class="nc-dot"></span>MedGemma</span>
-            <span class="ss-nav-chip nc-blue"><span class="nc-dot"></span>Llama 3.2</span>
-            <span class="ss-nav-chip nc-red"><span class="nc-dot"></span>Emergency Ready</span>
-        </div>
-    </div>
-    """)
 
-    # ── 2-column layout ──────────────────────────────────────────────────────
-    gr.HTML('<div class="ss-layout"><div class="ss-main">')
-
-    # Quick prompts
-    gr.HTML("""
-    <div class="ss-quickbar">
-        <button class="ss-qbtn" onclick="setMsg('I am feeling anxious today')">😟 Feeling anxious</button>
-        <button class="ss-qbtn" onclick="setMsg('Find hospitals in Hof')">🏥 Find hospitals</button>
-        <button class="ss-qbtn" onclick="setMsg('Find pharmacy near me')">💊 Find pharmacy</button>
-        <button class="ss-qbtn" onclick="setMsg('I am having trouble sleeping')">😴 Sleep issues</button>
-        <button class="ss-qbtn" onclick="setMsg('I feel overwhelmed')">🌊 Overwhelmed</button>
-        <button class="ss-qbtn" onclick="setMsg('Give me a breathing exercise')">🫁 Breathing</button>
-        <button class="ss-qbtn" onclick="setMsg('Show my mood history')">📊 Mood history</button>
-        <button class="ss-qbtn" onclick="setMsg('Give me crisis hotline numbers')">📞 Hotlines</button>
-    </div>
-    <script>
-    function setMsg(text) {
-        const ta = document.querySelector('#msg-input textarea');
-        if (!ta) return;
-        const nv = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
-        nv.set.call(ta, text);
-        ta.dispatchEvent(new Event('input', { bubbles: true }));
-        ta.focus();
-    }
-    </script>
-    """)
-
-    # Chat
-    chatbot = gr.Chatbot(
-        elem_id="chatbot",
-        show_label=False,
-        height=500,
-        layout="bubble",
-        placeholder="<div style='text-align:center;padding:100px 24px;'><div style='font-family:Playfair Display,serif;font-size:1.5rem;font-weight:400;color:#2a3a50;font-style:italic;'>What's on your mind today?</div><div style='font-size:0.68rem;color:#2a3a50;letter-spacing:0.18em;text-transform:uppercase;margin-top:12px;font-family:JetBrains Mono,monospace;opacity:0.5;'>safe · confidential · always here</div></div>",
+            <div class="status-strip">
+                <span class="status-pill pill-green">MedGemma</span>
+                <span class="status-pill pill-blue">Llama 3.2</span>
+                <span class="status-pill pill-red">Emergency Ready</span>
+            </div>
+        </header>
+        """
     )
 
-    # Input panel
-    with gr.Group(elem_classes="ss-input-wrap"):
-        msg = gr.Textbox(
-            placeholder="Share what's on your mind... I'm here to listen",
-            show_label=False,
-            elem_id="msg-input",
-            lines=3,
-            max_lines=8,
-        )
-        gr.HTML("""
-        <div class="ss-input-bar">
-            <span class="ss-input-hint">↵ enter to send · end-to-end private</span>
-        </div>
-        """)
-        with gr.Row():
-            send_btn = gr.Button("Send →", elem_id="send-btn", scale=4)
-            clear_btn = gr.Button("New session", elem_id="clear-btn", scale=1)
+    with gr.Row(elem_classes="app-grid"):
+        with gr.Column(scale=8, elem_classes="main-panel"):
+            gr.HTML(
+                """
+                <section class="hero-card">
+                    <h2>How are you feeling right now?</h2>
+                    <p>
+                        Use a quick prompt or write freely. The assistant will detect mood,
+                        call the right agent, and show safety status in real time.
+                    </p>
+                </section>
+                """
+            )
 
-    gr.HTML('</div><div class="ss-sidebar">')
+            gr.HTML(
+                """
+                <div class="quickbar">
+                    <button class="quick-btn" onclick="setMsg('I am feeling anxious today')">😟 Feeling anxious</button>
+                    <button class="quick-btn" onclick="setMsg('Find hospitals in Hof')">🏥 Find hospitals</button>
+                    <button class="quick-btn" onclick="setMsg('Find pharmacy near me')">💊 Find pharmacy</button>
+                    <button class="quick-btn" onclick="setMsg('I am having trouble sleeping')">😴 Sleep issues</button>
+                    <button class="quick-btn" onclick="setMsg('I feel overwhelmed')">🌊 Overwhelmed</button>
+                    <button class="quick-btn" onclick="setMsg('Give me a breathing exercise')">🫁 Breathing</button>
+                    <button class="quick-btn" onclick="setMsg('Show my mood history')">📊 Mood history</button>
+                    <button class="quick-btn" onclick="setMsg('Give me crisis hotline numbers')">📞 Hotlines</button>
+                </div>
 
-    # Mood card
-    gr.HTML('<div class="ss-card"><div class="ss-card-title">Current Mood</div>')
-    mood_label = gr.Textbox(
-        value="😐 Neutral",
-        elem_id="mood-label",
-        show_label=False,
-        interactive=False,
-        lines=1,
+                <script>
+                function setMsg(text) {
+                    const ta = document.querySelector('#msg-input textarea');
+                    if (!ta) return;
+
+                    const nativeSetter = Object.getOwnPropertyDescriptor(
+                        window.HTMLTextAreaElement.prototype,
+                        'value'
+                    ).set;
+
+                    nativeSetter.call(ta, text);
+                    ta.dispatchEvent(new Event('input', { bubbles: true }));
+                    ta.focus();
+                }
+                </script>
+                """
+            )
+
+            chatbot = gr.Chatbot(
+                elem_id="chatbot",
+                show_label=False,
+                height=540,
+                layout="bubble",
+                placeholder=(
+                    "<div style='text-align:center;padding:110px 24px;'>"
+                    "<div style='font-family:Playfair Display,serif;font-size:1.8rem;color:#dff7ef;'>"
+                    "What's on your mind today?"
+                    "</div>"
+                    "<div style='font-size:0.78rem;color:#77879f;letter-spacing:0.16em;"
+                    "text-transform:uppercase;margin-top:14px;font-family:JetBrains Mono,monospace;'>"
+                    "safe · private · supportive"
+                    "</div>"
+                    "</div>"
+                ),
+            )
+
+            with gr.Group(elem_classes="input-card"):
+                msg = gr.Textbox(
+                    placeholder="Share what's on your mind... I'm here to listen.",
+                    show_label=False,
+                    elem_id="msg-input",
+                    lines=3,
+                    max_lines=8,
+                )
+
+                with gr.Row(elem_classes="input-actions"):
+                    gr.HTML(
+                        '<span class="input-hint">Press Enter to send · Shift + Enter for new line</span>'
+                    )
+                    clear_btn = gr.Button("New session", elem_id="clear-btn", scale=1)
+                    send_btn = gr.Button("Send →", elem_id="send-btn", scale=2)
+
+        with gr.Column(scale=3, elem_classes="side-panel"):
+            gr.HTML('<div class="side-card"><div class="card-title">Current Mood</div>')
+
+            mood_label = gr.Textbox(
+                value="😐 Neutral",
+                elem_id="mood-label",
+                show_label=False,
+                interactive=False,
+                lines=1,
+            )
+
+            gr.HTML("</div>")
+
+            gr.HTML('<div class="side-card"><div class="card-title">Risk Status</div>')
+
+            risk_status = gr.HTML(value=make_risk_badge("NONE"))
+
+            gr.HTML("</div>")
+
+            gr.HTML('<div class="side-card"><div class="card-title">Session Stats</div>')
+
+            session_stats = gr.Textbox(
+                value="Messages: 0\nRisk: NONE\nAgent: None",
+                elem_id="session-stats",
+                show_label=False,
+                interactive=False,
+                lines=3,
+            )
+
+            gr.HTML("</div>")
+
+            gr.HTML(
+                """
+                <div class="side-card">
+                    <div class="card-title">Safety Notice</div>
+                    <div class="disclaimer">
+                        SafeSpace AI is <span class="warn">not a substitute</span>
+                        for professional medical care.<br><br>
+                        In emergencies call <strong>112</strong> in Europe,
+                        <strong>911</strong> in the USA, or <strong>999</strong> in the UK.
+                    </div>
+                </div>
+                """
+            )
+
+            gr.HTML(
+                """
+                <div class="side-card">
+                    <div class="card-title">System</div>
+                    <div class="metric-list">
+                        <div class="metric"><span>Backend</span><b>localhost:8000</b></div>
+                        <div class="metric"><span>UI</span><b>Gradio</b></div>
+                        <div class="metric"><span>Mode</span><b>Private Demo</b></div>
+                    </div>
+                </div>
+                """
+            )
+
+            gr.HTML('<div class="side-card"><div class="card-title">Agent Log</div>')
+
+            tool_log = gr.Textbox(
+                elem_id="tool-log",
+                show_label=False,
+                lines=7,
+                interactive=False,
+                placeholder="Activity log will appear here...",
+            )
+
+            gr.HTML("</div>")
+
+    gr.HTML(
+        '<div class="ss-footer">SAFESPACE AI · MEDGEMMA + LLAMA 3.2 · CALM PROFESSIONAL UI</div>'
     )
-    gr.HTML('</div>')
 
-    # Session stats card
-    gr.HTML('<div class="ss-card"><div class="ss-card-title">Session Stats</div>')
-    session_stats = gr.Textbox(
-        value="Messages: 0",
-        elem_id="session-stats",
-        show_label=False,
-        interactive=False,
-        lines=2,
-    )
-    gr.HTML('</div>')
+    gr.HTML("</div>")
 
-    # Disclaimer card
-    gr.HTML("""
-    <div class="ss-card">
-        <div class="ss-card-title">⚠ Important</div>
-        <div class="ss-disclaimer-text">
-            SafeSpace AI is <strong>not a substitute</strong> for professional care.<br><br>
-            In emergencies call:<br>
-            <strong style="color:#10b981">112</strong> Europe<br>
-            <strong style="color:#10b981">911</strong> USA<br>
-            <strong style="color:#10b981">999</strong> UK
-        </div>
-    </div>
-    """)
-
-    # Tool log card
-    gr.HTML('<div class="ss-card"><div class="ss-card-title">Agent Log</div>')
-    tool_log = gr.Textbox(
-        elem_id="tool-log",
-        show_label=False,
-        lines=6,
-        interactive=False,
-        placeholder="Activity log...",
-    )
-    gr.HTML('</div>')
-
-    gr.HTML('</div></div>')  # close sidebar + layout
-
-    gr.HTML("""
-    <div class="ss-footer">
-        <p>SAFESPACE AI · MEDGEMMA + LLAMA 3.2 · ALL CONVERSATIONS PRIVATE & ENCRYPTED</p>
-    </div>
-    """)
-
-    # ── State ────────────────────────────────────────────────────────────────
     history_state = gr.State([])
     tool_log_state = gr.State("")
 
-    send_btn.click(
+    send_event = send_btn.click(
         fn=chat,
-        inputs=[msg, history_state, tool_log_state, mood_label, session_stats],
-        outputs=[chatbot, msg, tool_log, mood_label, session_stats],
-    ).then(
+        inputs=[
+            msg,
+            history_state,
+            tool_log_state,
+            mood_label,
+            session_stats,
+            risk_status,
+        ],
+        outputs=[
+            chatbot,
+            msg,
+            tool_log,
+            mood_label,
+            session_stats,
+            risk_status,
+        ],
+    )
+
+    send_event.then(
         fn=lambda h, t: (h, t),
         inputs=[chatbot, tool_log],
         outputs=[history_state, tool_log_state],
     )
 
-    msg.submit(
+    submit_event = msg.submit(
         fn=chat,
-        inputs=[msg, history_state, tool_log_state, mood_label, session_stats],
-        outputs=[chatbot, msg, tool_log, mood_label, session_stats],
-    ).then(
+        inputs=[
+            msg,
+            history_state,
+            tool_log_state,
+            mood_label,
+            session_stats,
+            risk_status,
+        ],
+        outputs=[
+            chatbot,
+            msg,
+            tool_log,
+            mood_label,
+            session_stats,
+            risk_status,
+        ],
+    )
+
+    submit_event.then(
         fn=lambda h, t: (h, t),
         inputs=[chatbot, tool_log],
         outputs=[history_state, tool_log_state],
     )
 
-    clear_btn.click(
+    clear_event = clear_btn.click(
         fn=clear_chat,
-        outputs=[chatbot, msg, tool_log, mood_label, session_stats],
-    ).then(
+        outputs=[
+            chatbot,
+            msg,
+            tool_log,
+            mood_label,
+            session_stats,
+            risk_status,
+        ],
+    )
+
+    clear_event.then(
         fn=lambda: ([], ""),
         outputs=[history_state, tool_log_state],
     )
@@ -617,6 +940,7 @@ if __name__ == "__main__":
         server_name="0.0.0.0",
         server_port=7860,
         share=False,
-        show_error=True,
+        show_error=False,
         css=CSS,
+        theme=gr.themes.Base(),
     )
