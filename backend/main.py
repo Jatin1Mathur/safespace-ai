@@ -1,3 +1,5 @@
+import re
+
 from fastapi import FastAPI
 from pydantic import BaseModel
 import uvicorn
@@ -109,13 +111,28 @@ I'm here to help with:
 I'm not able to help with topics outside of healthcare and wellbeing. Is there something health-related I can support you with today? 💚"""
 
 
+def _keyword_pattern(keyword: str) -> re.Pattern:
+    """Match a keyword at a word start, so "hi" no longer matches "history".
+
+    Keywords of up to 3 letters (hi, yes, ill, sad...) must match a whole word;
+    longer ones may continue ("feel" still matches "feeling").
+    """
+    escaped = re.escape(keyword)
+    if len(keyword) <= 3:
+        return re.compile(rf"\b{escaped}\b")
+    return re.compile(rf"\b{escaped}")
+
+
+HEALTH_PATTERNS = [_keyword_pattern(kw) for kw in HEALTH_KEYWORDS]
+
+
 def is_health_related(message: str) -> bool:
     """Check if message is related to health/mental health."""
     msg_lower = message.lower()
     # Allow short messages (greetings, yes/no responses)
     if len(message.strip()) < 15:
         return True
-    return any(kw in msg_lower for kw in HEALTH_KEYWORDS)
+    return any(pattern.search(msg_lower) for pattern in HEALTH_PATTERNS)
 
 
 def extract_city(message: str) -> str:
