@@ -304,6 +304,7 @@ safespace-ai/
 │   ├── ai_agent.py      # LangGraph ReAct agent (Llama 3.2) and tool definitions
 │   ├── tools.py         # MedGemma queries, Twilio call, risk detector, OSM search, SOAP notes
 │   └── config.py        # Settings loaded from environment variables (.env)
+├── tests/               # pytest suite: crisis detection, mood, health filter, API routing
 ├── docs/
 │   └── SafeSpace_AI_Presentation.pptx   # Project presentation
 ├── gradio_frontend.py   # Gradio chat interface (port 7860)
@@ -358,6 +359,12 @@ The API runs on http://localhost:8000.
 python gradio_frontend.py
 ```
 Open **http://localhost:7860**.
+
+### Run the tests
+```bash
+uv run pytest
+```
+The tests replace Twilio, Ollama and the location lookups with fakes, so they run offline and never place a real call.
 
 ### Share a public demo link
 [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/) creates a temporary public HTTPS link, with no account needed:
@@ -450,7 +457,9 @@ LangGraph is the best fit here because the project needs **state, routing and sa
 | FastAPI backend | Keyword risk detection can miss context | User login |
 | Gradio interface | External APIs can fail | Database history |
 | Crisis detection | Privacy and compliance must be reviewed | Human review path |
-| Twilio emergency call | | PDF export |
+| Twilio emergency call | Session history is kept in memory for a single user | PDF export |
+| Automated pytest suite | Mood history is stored in a local JSON file | Per-user sessions in a database |
+| | No live therapist directory (the tool points to official services) | |
 | Clinic / pharmacy finder | | Stronger emotion model |
 | SOAP note output | | |
 

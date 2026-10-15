@@ -28,13 +28,20 @@ def emergency_call_tool() -> str:
 @tool
 def find_nearby_therapists_by_location(location: str) -> str:
     """
-    Finds licensed therapists near the specified location.
+    Explains how to find a licensed therapist near the specified location.
+    Use when the user asks for a therapist, psychologist or counsellor.
     """
+    # No live therapist directory is integrated, so point to official
+    # services instead of returning names or numbers that could be wrong.
     return (
-        f"Here are some therapists near {location}:\n"
-        "- Dr. Ayesha Kapoor - +49 (555) 123-4567\n"
-        "- Dr. James Patel - +49 (555) 987-6543\n"
-        "- MindCare Counseling Center - +49 (555) 222-3333"
+        f"I can't look up individual therapists in {location}, "
+        "but these official services can help you find one:\n"
+        "- Germany: call 116117 (Patientenservice) for a psychotherapy "
+        "appointment, or search at https://arztsuche.116117.de\n"
+        "- Elsewhere: ask your family doctor or your health insurer for a "
+        "referral to a licensed therapist nearby.\n"
+        "If you are in crisis, please call 112 (EU) or your local "
+        "emergency number now."
     )
 
 
@@ -110,7 +117,7 @@ If asked about anything unrelated to health, politely redirect to health topics.
 You have access to these tools:
 1. `ask_mental_health_specialist` - for all emotional and mental health queries
 2. `emergency_call_tool` - IMMEDIATELY if user is in crisis or suicidal
-3. `find_nearby_therapists_by_location` - find therapists by city
+3. `find_nearby_therapists_by_location` - explain how to find a licensed therapist
 4. `nearby_clinics_tool` - find hospitals/clinics by city name
 5. `nearby_pharmacy_tool` - find pharmacies near user
 6. `crisis_hotlines_tool` - get crisis helpline numbers

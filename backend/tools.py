@@ -95,8 +95,9 @@ def call_emergency() -> str:
 
 # ── 4. Crisis risk detector ──────────────────────────────────────────────────
 def assess_crisis_risk(message: str) -> dict:
-    HIGH_RISK = ["kill myself", "end my life", "suicide", "want to die",
-                 "no reason to live", "hurt myself", "self harm", "overdose"]
+    HIGH_RISK = ["kill myself", "end my life", "suicide", "suicidal",
+                 "want to die", "no reason to live", "hurt myself",
+                 "harm myself", "self harm", "self-harm", "overdose"]
     MEDIUM_RISK = ["can't go on", "hopeless", "worthless", "nobody cares",
                    "give up", "disappear", "burden", "trapped", "no way out"]
     LOW_RISK = ["sad", "depressed", "anxious", "stressed", "lonely",
