@@ -1,0 +1,29 @@
+name: CI
+
+# Run on every push to main and on every pull request
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Get the code
+      - uses: actions/checkout@v4
+
+      # 2. Install uv (it also installs the Python version from .python-version)
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # 3. Install exactly the pinned dependencies from uv.lock (incl. pytest)
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      # 4. Run the tests. External services (Ollama, Twilio, APIs) are
+      #    replaced with fakes in the tests, so no models or keys are needed.
+      - name: Run tests
+        run: uv run pytest -v
