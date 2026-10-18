@@ -1,8 +1,13 @@
 """Unit tests for the rule-based safety and helper logic in backend/tools.py."""
 
 import pytest
+import requests
 
-from tools import assess_crisis_risk, detect_mood, get_breathing_exercise, load_memory, log_mood
+import tools
+from tools import (
+    assess_crisis_risk, detect_mood, find_clinics_by_city, get_breathing_exercise,
+    load_memory, log_mood, query_overpass,
+)
 
 
 @pytest.mark.parametrize(
@@ -64,3 +69,51 @@ def test_log_mood_persists_entry():
 def test_breathing_exercise_returns_text(technique):
     text = get_breathing_exercise(technique)
     assert isinstance(text, str) and text.strip()
+
+
+# ── Map search with backup servers (no real network calls) ──────────────────
+
+class FakeResponse:
+    def __init__(self, elements):
+        self.status_code = 200
+        self.text = "ok"
+        self._elements = elements
+
+    def json(self):
+        return {"elements": self._elements}
+
+
+def test_overpass_falls_back_to_backup_server(monkeypatch):
+    called = []
+
+    def fake_get(url, **kwargs):
+        called.append(url)
+        if url == tools.OVERPASS_SERVERS[0]:
+            raise requests.Timeout("main server too slow")
+        return FakeResponse([{"tags": {"name": "Klinikum"}}])
+
+    monkeypatch.setattr(tools.requests, "get", fake_get)
+    assert query_overpass("query") == [{"tags": {"name": "Klinikum"}}]
+    assert called == tools.OVERPASS_SERVERS[:2]
+
+
+def test_overpass_returns_none_when_all_servers_fail(monkeypatch):
+    def always_timeout(url, **kwargs):
+        raise requests.Timeout("too slow")
+
+    monkeypatch.setattr(tools.requests, "get", always_timeout)
+    assert query_overpass("query") is None
+
+
+def test_clinic_search_shows_friendly_message_when_map_service_is_down(monkeypatch):
+    class GeoResponse:
+        def json(self):
+            return [{"lat": "48.1", "lon": "11.6", "display_name": "Munich, Bavaria"}]
+
+    monkeypatch.setattr(tools.requests, "get", lambda url, **kwargs: GeoResponse())
+    monkeypatch.setattr(tools, "query_overpass", lambda query: None)
+
+    text = find_clinics_by_city("Munich")
+    assert "busy" in text
+    assert "maps.google.com" in text
+    assert "HTTPSConnectionPool" not in text

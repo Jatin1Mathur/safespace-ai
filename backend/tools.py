@@ -245,6 +245,31 @@ def get_crisis_hotlines() -> str:
     return output
 
 
+# ── 7b. OpenStreetMap (Overpass) search with backup servers ──────────────────
+# The public Overpass servers are free but often overloaded, so we try the
+# main server first and fall back to mirrors if it is slow or fails.
+OVERPASS_SERVERS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+]
+
+
+def query_overpass(query: str, timeout: int = 10) -> list | None:
+    """Run an Overpass query; return its elements, or None if every server failed."""
+    for url in OVERPASS_SERVERS:
+        try:
+            response = requests.get(
+                url, params={"data": query}, timeout=timeout,
+                headers={"User-Agent": "SafeSpaceAI/1.0"}
+            )
+            if response.status_code == 200 and response.text.strip():
+                return response.json().get("elements", [])
+        except (requests.RequestException, ValueError):
+            pass  # timeout, connection error or invalid JSON: try the next server
+    return None
+
+
 # ── 8. Pharmacy finder ───────────────────────────────────────────────────────
 def find_pharmacies() -> str:
     try:
@@ -254,18 +279,14 @@ def find_pharmacies() -> str:
         city = location.get("city", "")
 
         query = f'[out:json][timeout:25];node["amenity"="pharmacy"](around:5000,{lat},{lng});out body 6;'
-        response = requests.get(
-            "https://overpass-api.de/api/interpreter",
-            params={"data": query}, timeout=20,
-            headers={"User-Agent": "SafeSpaceAI/1.0"}
-        )
-        results = []
-        if response.status_code == 200 and response.text.strip():
-            results = response.json().get("elements", [])
+        results = query_overpass(query)
 
-        if not results:
+        maps_search = f"🗺 Search pharmacies: https://maps.google.com/?q=pharmacy+near+{quote(display)}"
+        if results is None:  # every map server failed
             return (f"📍 Your location: {display}\n\n"
-                    f"🗺 Search pharmacies: https://maps.google.com/?q=pharmacy+near+{quote(display)}")
+                    f"The map service is busy right now, so I couldn't load the list.\n{maps_search}")
+        if not results:  # the search worked but found nothing
+            return f"📍 Your location: {display}\n\n{maps_search}"
 
         output = f"📍 Your location: {display}\n\n💊 Nearby Pharmacies:\n\n"
         seen = set()
@@ -294,8 +315,9 @@ def find_pharmacies() -> str:
             if count >= 5:
                 break
         return output.strip()
-    except Exception as e:
-        return f"Error finding pharmacies: {str(e)}"
+    except Exception:
+        return ("Sorry, I couldn't search for pharmacies right now. "
+                "You can search here: https://maps.google.com/?q=pharmacy+near+me")
 
 
 # ── 9. Hospitals & clinics ───────────────────────────────────────────────────
@@ -312,18 +334,14 @@ def find_clinics_by_city(city: str) -> str:
         display = geo[0].get("display_name", city).split(",")[0]
 
         query = f'[out:json][timeout:25];(node["amenity"~"hospital|clinic|doctors"](around:10000,{lat},{lng});way["amenity"~"hospital|clinic"](around:10000,{lat},{lng}););out center 10;'
-        response = requests.get(
-            "https://overpass-api.de/api/interpreter",
-            params={"data": query}, timeout=20,
-            headers={"User-Agent": "SafeSpaceAI/1.0"}
-        )
-        results = []
-        if response.status_code == 200 and response.text.strip():
-            results = response.json().get("elements", [])
+        results = query_overpass(query)
 
-        if not results:
+        maps_search = f"🗺 Google Maps: https://maps.google.com/?q=hospitals+near+{quote(city)}"
+        if results is None:  # every map server failed
             return (f"📍 Searching near: {display}\n\n"
-                    f"🗺 Google Maps: https://maps.google.com/?q=hospitals+near+{quote(city)}")
+                    f"The map service is busy right now, so I couldn't load the list.\n{maps_search}")
+        if not results:  # the search worked but found nothing
+            return f"📍 Searching near: {display}\n\n{maps_search}"
 
         output = f"📍 Searching near: {display}\n\n🏥 Nearby Medical Facilities:\n\n"
         seen = set()
@@ -358,8 +376,10 @@ def find_clinics_by_city(city: str) -> str:
             if count >= 5:
                 break
         return output.strip()
-    except Exception as e:
-        return f"Error finding clinics: {str(e)}"
+    except Exception:
+        return ("Sorry, I couldn't search for clinics right now. "
+                f"You can search here: https://maps.google.com/?q=hospitals+near+{quote(city)}\n"
+                "In an emergency, call 112.")
 
 
 # ── 10. Session summary ──────────────────────────────────────────────────────
