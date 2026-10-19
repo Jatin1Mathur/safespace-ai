@@ -134,3 +134,44 @@ def test_normal_agent_answer_is_kept(client, monkeypatch):
     data = ask(client, "I've been feeling stressed about my exams")
     assert data["response"] == "Exam stress is very common."
     assert data["tool_called"] == "ask_mental_health_specialist"
+
+
+def test_agent_crash_falls_back_instead_of_500(client, monkeypatch):
+    def broken_stream(*args, **kwargs):
+        raise ConnectionError("Ollama is not running")
+    monkeypatch.setattr(main.graph, "stream", broken_stream)
+    data = ask(client, "I've been feeling stressed about my exams")   # ask() asserts 200
+    assert data["response"] == "FAKE_MEDGEMMA"
+    assert data["tool_called"] == "medgemma_fallback"
+
+
+# ── Routing uses whole words, and every quick-button on the page works ─────────
+
+@pytest.mark.parametrize(
+    "message, expected_tool",
+    [
+        ("Where is the nearest pharmacy?", "pharmacy_finder"),      # "rest" in "nearest"
+        ("I am interested in finding a doctor in Munich", "clinic_finder"),  # "rest" in "interested"
+        # the eight quick-buttons in gradio_frontend.py
+        ("Find hospitals in Hof", "clinic_finder"),
+        ("Find pharmacy near me", "pharmacy_finder"),
+        ("I am having trouble sleeping", "sleep_advice"),
+        ("Give me a breathing exercise", "breathing_exercise"),
+        ("Show my mood history", "mood_tracker"),
+        ("Give me crisis hotline numbers", "hotline_directory"),
+    ],
+)
+def test_routing_matches_whole_words(client, monkeypatch, message, expected_tool):
+    monkeypatch.setattr(main, "find_pharmacies", lambda: "FAKE_PHARMACIES")
+    monkeypatch.setattr(main, "find_clinics_by_city", lambda city: f"FAKE_CLINICS {city}")
+    assert ask(client, message)["tool_called"] == expected_tool
+
+
+@pytest.mark.parametrize("message", ["I am feeling anxious today", "I feel overwhelmed"])
+def test_emotional_quick_buttons_reach_the_agent(client, monkeypatch, message):
+    monkeypatch.setattr(main.graph, "stream", lambda *args, **kwargs: iter([]))
+    monkeypatch.setattr(main, "parse_response",
+                        lambda stream: ("ask_mental_health_specialist", "A caring answer."))
+    data = ask(client, message)
+    assert data["tool_called"] == "ask_mental_health_specialist"
+    assert data["risk"] == "LOW"

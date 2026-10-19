@@ -148,6 +148,25 @@ def _keyword_pattern(keyword: str) -> re.Pattern:
 HEALTH_PATTERNS = [_keyword_pattern(kw) for kw in HEALTH_KEYWORDS]
 
 
+def _patterns(keywords: list) -> list:
+    return [_keyword_pattern(kw) for kw in keywords]
+
+
+def mentions(msg: str, patterns: list) -> bool:
+    """Word-boundary keyword match, so "rest" no longer matches "nearest"."""
+    return any(pattern.search(msg) for pattern in patterns)
+
+
+BREATHING_PATTERNS = _patterns(BREATHING_KEYWORDS)
+SLEEP_PATTERNS = _patterns(SLEEP_KEYWORDS)
+MOOD_PATTERNS = _patterns(MOOD_KEYWORDS)
+HOTLINE_PATTERNS = _patterns(HOTLINE_KEYWORDS)
+SUMMARY_PATTERNS = _patterns(SUMMARY_KEYWORDS)
+SOAP_PATTERNS = _patterns(SOAP_KEYWORDS)
+PHARMACY_PATTERNS = _patterns(PHARMACY_KEYWORDS)
+CLINIC_PATTERNS = _patterns(CLINIC_KEYWORDS)
+
+
 def is_health_related(message: str) -> bool:
     """Check if message is related to health/mental health."""
     msg_lower = message.lower()
@@ -232,7 +251,7 @@ Please reach out to one of these lines right now — they are free, confidential
                 "mood": mood, "risk": risk["level"]}
 
     # ── Breathing exercise ───────────────────────────────────────────────────
-    if any(kw in msg for kw in BREATHING_KEYWORDS):
+    if mentions(msg, BREATHING_PATTERNS):
         technique = "478" if "sleep" in msg else "box"
         response = get_breathing_exercise(technique)
         session_history.append({"role": "user", "content": original})
@@ -241,7 +260,7 @@ Please reach out to one of these lines right now — they are free, confidential
                 "mood": mood, "risk": risk["level"]}
 
     # ── Sleep advice ─────────────────────────────────────────────────────────
-    if any(kw in msg for kw in SLEEP_KEYWORDS):
+    if mentions(msg, SLEEP_PATTERNS):
         response = get_sleep_advice(original)
         session_history.append({"role": "user", "content": original})
         session_history.append({"role": "assistant", "content": response})
@@ -249,7 +268,7 @@ Please reach out to one of these lines right now — they are free, confidential
                 "mood": mood, "risk": risk["level"]}
 
     # ── Mood history ─────────────────────────────────────────────────────────
-    if any(kw in msg for kw in MOOD_KEYWORDS):
+    if mentions(msg, MOOD_PATTERNS):
         response = get_mood_summary()
         session_history.append({"role": "user", "content": original})
         session_history.append({"role": "assistant", "content": response})
@@ -257,7 +276,7 @@ Please reach out to one of these lines right now — they are free, confidential
                 "mood": mood, "risk": risk["level"]}
 
     # ── Crisis hotlines ───────────────────────────────────────────────────────
-    if any(kw in msg for kw in HOTLINE_KEYWORDS):
+    if mentions(msg, HOTLINE_PATTERNS):
         response = get_crisis_hotlines()
         session_history.append({"role": "user", "content": original})
         session_history.append({"role": "assistant", "content": response})
@@ -265,7 +284,7 @@ Please reach out to one of these lines right now — they are free, confidential
                 "mood": mood, "risk": risk["level"]}
 
     # ── Session summary ───────────────────────────────────────────────────────
-    if any(kw in msg for kw in SUMMARY_KEYWORDS):
+    if mentions(msg, SUMMARY_PATTERNS):
         response = generate_session_summary(session_history)
         session_history.append({"role": "user", "content": original})
         session_history.append({"role": "assistant", "content": response})
@@ -274,7 +293,7 @@ Please reach out to one of these lines right now — they are free, confidential
 
 
     # ── SOAP Note Generator ───────────────────────────────────────────────────
-    if any(kw in msg for kw in SOAP_KEYWORDS):
+    if mentions(msg, SOAP_PATTERNS):
         memory = load_memory()
         mood_history = memory.get("mood_history", [])
         response = generate_soap_note(session_history, mood_history)
@@ -284,7 +303,7 @@ Please reach out to one of these lines right now — they are free, confidential
                 "mood": mood, "risk": risk["level"]}
 
     # ── Pharmacy finder ───────────────────────────────────────────────────────
-    if any(kw in msg for kw in PHARMACY_KEYWORDS):
+    if mentions(msg, PHARMACY_PATTERNS):
         response = find_pharmacies()
         session_history.append({"role": "user", "content": original})
         session_history.append({"role": "assistant", "content": response})
@@ -292,7 +311,7 @@ Please reach out to one of these lines right now — they are free, confidential
                 "mood": mood, "risk": risk["level"]}
 
     # ── Clinic/hospital finder ────────────────────────────────────────────────
-    if any(kw in msg for kw in CLINIC_KEYWORDS):
+    if mentions(msg, CLINIC_PATTERNS):
         city = extract_city(original)
         if city:
             response = find_clinics_by_city(city)
@@ -310,8 +329,12 @@ Please reach out to one of these lines right now — they are free, confidential
             ("user", original)
         ]
     }
-    stream = graph.stream(inputs, stream_mode="updates")
-    tool_called_name, final_response = parse_response(stream)
+    try:
+        stream = graph.stream(inputs, stream_mode="updates")
+        tool_called_name, final_response = parse_response(stream)
+    except Exception:
+        # e.g. Ollama is not running: never crash, use the fallback below
+        tool_called_name, final_response = "None", None
 
     # If the agent gave no answer, or wrote a tool call as text instead of
     # running it, fall back to a direct MedGemma answer.
