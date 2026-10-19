@@ -107,3 +107,30 @@ def test_therapist_tool_returns_no_fabricated_contacts():
     text = find_nearby_therapists_by_location.invoke({"location": "Hof"})
     assert "555" not in text
     assert "116117" in text
+
+
+# ── Greetings and agent fallback ─────────────────────────────────────────────
+
+@pytest.mark.parametrize("message", ["hey", "Hi!", "hello", "Good morning"])
+def test_greeting_gets_friendly_reply_without_ai(client, message):
+    data = ask(client, message)
+    assert data["tool_called"] == "greeting"
+    assert "SafeSpace" in data["response"]
+
+
+def test_raw_tool_call_text_from_agent_falls_back_to_medgemma(client, monkeypatch):
+    raw = 'assistant**\n{"name": "breathing_exercise_tool", "parameters": {"exercise": "4-7-8"}}'
+    monkeypatch.setattr(main.graph, "stream", lambda *args, **kwargs: iter([]))
+    monkeypatch.setattr(main, "parse_response", lambda stream: ("None", raw))
+    data = ask(client, "I've been feeling stressed about my exams")
+    assert data["response"] == "FAKE_MEDGEMMA"
+    assert data["tool_called"] == "medgemma_fallback"
+
+
+def test_normal_agent_answer_is_kept(client, monkeypatch):
+    monkeypatch.setattr(main.graph, "stream", lambda *args, **kwargs: iter([]))
+    monkeypatch.setattr(main, "parse_response",
+                        lambda stream: ("ask_mental_health_specialist", "Exam stress is very common."))
+    data = ask(client, "I've been feeling stressed about my exams")
+    assert data["response"] == "Exam stress is very common."
+    assert data["tool_called"] == "ask_mental_health_specialist"

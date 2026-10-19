@@ -98,6 +98,28 @@ SOAP_KEYWORDS = [
     "soap", "icd", "clinical document"
 ]
 
+GREETINGS = {"hi", "hey", "hello", "hallo", "hi there", "hey there",
+             "good morning", "good evening", "guten tag", "moin"}
+
+GREETING_RESPONSE = """🌿 Hi, I'm SafeSpace, an AI support assistant (not a therapist).
+
+You can talk to me about how you're feeling, ask for a breathing exercise or sleep tips,
+or find hospitals, pharmacies and crisis hotlines. How are you doing today? 💚"""
+
+
+def is_greeting(message: str) -> bool:
+    """True for a plain greeting like "hey" or "Hello!"."""
+    return message.lower().strip(" !.,?") in GREETINGS
+
+
+def looks_like_raw_tool_call(text: str) -> bool:
+    """Small local models sometimes write a tool call as plain JSON text
+    (e.g. {"name": "breathing_exercise_tool", "parameters": {...}})
+    instead of really calling the tool. That must never reach the user."""
+    return bool(re.search(r'"name"\s*:\s*"\w+"', text)) and (
+        '"parameters"' in text or '"arguments"' in text)
+
+
 OFF_TOPIC_RESPONSE = """🌿 I'm SafeSpace — a mental health and medical support assistant.
 
 I'm here to help with:
@@ -202,6 +224,13 @@ Please reach out to one of these lines right now — they are free, confidential
         return {"response": response, "tool_called": "crisis_support",
                 "mood": mood, "risk": risk["level"]}
 
+    # ── Greeting ─────────────────────────────────────────────────────────────
+    if is_greeting(original):
+        session_history.append({"role": "user", "content": original})
+        session_history.append({"role": "assistant", "content": GREETING_RESPONSE})
+        return {"response": GREETING_RESPONSE, "tool_called": "greeting",
+                "mood": mood, "risk": risk["level"]}
+
     # ── Breathing exercise ───────────────────────────────────────────────────
     if any(kw in msg for kw in BREATHING_KEYWORDS):
         technique = "478" if "sleep" in msg else "box"
@@ -283,6 +312,12 @@ Please reach out to one of these lines right now — they are free, confidential
     }
     stream = graph.stream(inputs, stream_mode="updates")
     tool_called_name, final_response = parse_response(stream)
+
+    # If the agent gave no answer, or wrote a tool call as text instead of
+    # running it, fall back to a direct MedGemma answer.
+    if not final_response or looks_like_raw_tool_call(final_response):
+        final_response = query_medgemma_safe(original)
+        tool_called_name = "medgemma_fallback"
 
     session_history.append({"role": "user", "content": original})
     session_history.append({"role": "assistant", "content": final_response or ""})
