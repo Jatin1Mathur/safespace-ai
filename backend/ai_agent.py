@@ -1,8 +1,20 @@
 import warnings
+
+# Silence library deprecation warnings before the imports below trigger them
 warnings.filterwarnings("ignore")
 
-from langchain.tools import tool
-from tools import query_medgemma, call_emergency, find_clinics_by_city, find_pharmacies, get_crisis_hotlines, get_breathing_exercise, get_sleep_advice
+from langchain.tools import tool  # noqa: E402
+from langchain_ollama import ChatOllama  # noqa: E402
+from langgraph.prebuilt import create_react_agent  # noqa: E402
+from tools import (  # noqa: E402
+    call_emergency,
+    find_clinics_by_city,
+    find_pharmacies,
+    get_breathing_exercise,
+    get_crisis_hotlines,
+    get_sleep_advice,
+    query_medgemma,
+)
 
 
 @tool
@@ -88,10 +100,6 @@ def sleep_advice_tool() -> str:
     Use when user mentions sleep problems or insomnia.
     """
     return get_sleep_advice()
-
-
-from langchain_ollama import ChatOllama
-from langgraph.prebuilt import create_react_agent
 
 
 tools = [

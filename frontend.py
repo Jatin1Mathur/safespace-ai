@@ -1,6 +1,6 @@
 #step 1 : setup streamlit
-import streamlit as st
 import requests
+import streamlit as st
 
 BACKEND_URL = "http://localhost:8000/ask"
 

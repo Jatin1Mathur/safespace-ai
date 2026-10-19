@@ -4,11 +4,10 @@ External services (Twilio, Ollama/MedGemma, location and hotline lookups)
 are replaced with fakes, so the tests run offline and never place a call.
 """
 
-import pytest
-from fastapi.testclient import TestClient
-
 import main
+import pytest
 from ai_agent import find_nearby_therapists_by_location
+from fastapi.testclient import TestClient
 from main import extract_city, is_health_related
 
 

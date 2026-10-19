@@ -23,8 +23,16 @@ dependencies = [
 dev = [
     "httpx>=0.28.1",
     "pytest>=8.4.0",
+    "ruff>=0.17.1",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["backend", "."]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+# pyflakes (unused code, undefined names), basic pycodestyle errors, sorted imports
+select = ["E4", "E7", "E9", "F", "I"]

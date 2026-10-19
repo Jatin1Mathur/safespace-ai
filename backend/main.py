@@ -1,17 +1,23 @@
 import re
 
+import uvicorn
+from ai_agent import SYSTEM_PROMPT, graph, parse_response
 from fastapi import FastAPI
 from pydantic import BaseModel
-import uvicorn
-import requests
-from urllib.parse import quote
-
-from ai_agent import graph, SYSTEM_PROMPT, parse_response
 from tools import (
-    call_emergency, find_clinics_by_city, find_pharmacies,
-    get_crisis_hotlines, get_breathing_exercise, get_sleep_advice,
-    get_mood_summary, detect_mood, log_mood, assess_crisis_risk,
-    generate_session_summary, generate_soap_note, load_memory
+    assess_crisis_risk,
+    call_emergency,
+    detect_mood,
+    find_clinics_by_city,
+    find_pharmacies,
+    generate_session_summary,
+    generate_soap_note,
+    get_breathing_exercise,
+    get_crisis_hotlines,
+    get_mood_summary,
+    get_sleep_advice,
+    load_memory,
+    log_mood,
 )
 
 app = FastAPI()

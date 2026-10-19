@@ -2,11 +2,15 @@
 
 import pytest
 import requests
-
 import tools
 from tools import (
-    assess_crisis_risk, detect_mood, find_clinics_by_city, get_breathing_exercise,
-    load_memory, log_mood, query_overpass,
+    assess_crisis_risk,
+    detect_mood,
+    find_clinics_by_city,
+    get_breathing_exercise,
+    load_memory,
+    log_mood,
+    query_overpass,
 )
 
 

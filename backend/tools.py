@@ -1,12 +1,13 @@
-import ollama
-import requests
 import json
 import os
 import time
-from urllib.parse import quote
 from datetime import datetime
+from urllib.parse import quote
+
+import ollama
+import requests
+from config import EMERGENCY_CONTACT, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER
 from twilio.rest import Client
-from config import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER, EMERGENCY_CONTACT
 
 # ── Session memory file ──────────────────────────────────────────────────────
 MEMORY_FILE = os.path.join(os.path.dirname(__file__), "session_memory.json")
@@ -516,7 +517,6 @@ def generate_soap_note(session_history: list, mood_history: list = None) -> str:
 
     # Extract user messages only for subjective
     user_messages = [m["content"] for m in session_history if m["role"] == "user"]
-    assistant_messages = [m["content"] for m in session_history if m["role"] == "assistant"]
 
     if not user_messages:
         return "No patient messages found to generate a SOAP note."
@@ -566,7 +566,7 @@ Be concise, professional, and use clinical language."""
         )
         soap_content = response['message']['content'].strip()
 
-    except Exception as e:
+    except Exception:
         # Fallback: generate basic SOAP note without AI
         soap_content = f"""SUBJECTIVE: Patient reported various emotional concerns during this session. {user_messages[0][:150] if user_messages else 'No specific complaints noted.'}
 
