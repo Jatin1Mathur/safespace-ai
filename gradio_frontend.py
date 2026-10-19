@@ -65,7 +65,8 @@ def call_backend(message: str) -> tuple[str, str, str, str]:
         mood = data.get("mood", "neutral")
         risk = data.get("risk", "NONE")
 
-        if is_technical_error_message(response):
+        # Never hide a crisis reply: it contains the hotline numbers the user needs
+        if risk not in ("HIGH", "MEDIUM") and is_technical_error_message(response):
             response = GENERAL_SERVICE_MESSAGE
             tool = "System"
             mood = "neutral"

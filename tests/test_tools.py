@@ -141,3 +141,19 @@ def test_clinic_search_uses_nominatim_when_overpass_is_down(monkeypatch):
     assert "Katharinenhospital" in text
     assert "busy" not in text
     assert "• Stuttgart" not in text          # only real hospitals, not the city itself
+
+
+def test_failed_twilio_call_gives_calm_message(monkeypatch):
+    """If Twilio is configured but the call fails, the user must not see a raw error."""
+    import tools
+
+    for name in ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM_NUMBER", "EMERGENCY_CONTACT"]:
+        monkeypatch.setattr(tools, name, "set")
+
+    def broken_client(*args, **kwargs):
+        raise RuntimeError("HTTP 401 error from https://api.twilio.com: Authenticate")
+
+    monkeypatch.setattr(tools, "Client", broken_client)
+    text = tools.call_emergency()
+    assert "112" in text
+    assert "twilio" not in text.lower()

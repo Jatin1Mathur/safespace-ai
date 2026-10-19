@@ -221,7 +221,7 @@ async def ask(query: Query):
         hotlines = get_crisis_hotlines()
         response = f"""🚨 I'm very concerned about what you've shared.
 
-You are not alone, and your life has value. I've initiated an emergency contact on your behalf.
+You are not alone, and your life has value.
 
 {hotlines}
 

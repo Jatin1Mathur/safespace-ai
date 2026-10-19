@@ -90,7 +90,10 @@ def call_emergency() -> str:
         )
         return f"Emergency call placed. Call SID: {call.sid}"
     except Exception as e:
-        return f"Failed to place emergency call: {str(e)}"
+        # Log the real error for the developer, but show the user a calm, clear message
+        print(f"[emergency_call] Twilio call failed: {e}")
+        return ("I couldn't place the emergency call automatically. "
+                "Please call 112 (EU) or your local emergency number right now.")
 
 
 # ── 4. Crisis risk detector ──────────────────────────────────────────────────
