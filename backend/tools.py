@@ -270,6 +270,35 @@ def query_overpass(query: str, timeout: int = 10) -> list | None:
     return None
 
 
+def search_places_nominatim(what: str, near: str, types: set, limit: int = 5) -> list:
+    """Final backup when every Overpass server fails: Nominatim can also find
+    places like "hospital in Stuttgart". Only real places of the wanted types
+    are kept. Returns [] if nothing was found or Nominatim also fails."""
+    try:
+        response = requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": f"{what} in {near}", "format": "json", "limit": limit},
+            headers={"User-Agent": "SafeSpaceAI/1.0"}, timeout=8
+        )
+        if response.status_code != 200:
+            return []
+        return [p for p in response.json()
+                if p.get("class") == "amenity" and p.get("type") in types and p.get("name")]
+    except Exception:  # a backup must never break the friendly fallback message
+        return []
+
+
+def format_nominatim_places(places: list, header: str) -> str:
+    output = header
+    for place in places:
+        name = place["name"]
+        address = ", ".join(place.get("display_name", "").split(", ")[1:4])
+        output += f"• {name}\n"
+        output += f"  📍 {address or 'Address not listed'}\n"
+        output += f"  🗺 Maps: https://maps.google.com/?q={quote(place.get('display_name', name))}\n\n"
+    return output.strip()
+
+
 # ── 8. Pharmacy finder ───────────────────────────────────────────────────────
 def find_pharmacies() -> str:
     try:
@@ -282,7 +311,11 @@ def find_pharmacies() -> str:
         results = query_overpass(query)
 
         maps_search = f"🗺 Search pharmacies: https://maps.google.com/?q=pharmacy+near+{quote(display)}"
-        if results is None:  # every map server failed
+        if results is None:  # every Overpass server failed → try Nominatim
+            places = search_places_nominatim("pharmacy", city or display, {"pharmacy"})
+            if places:
+                return format_nominatim_places(
+                    places, f"📍 Your location: {display}\n\n💊 Nearby Pharmacies:\n\n")
             return (f"📍 Your location: {display}\n\n"
                     f"The map service is busy right now, so I couldn't load the list.\n{maps_search}")
         if not results:  # the search worked but found nothing
@@ -337,7 +370,11 @@ def find_clinics_by_city(city: str) -> str:
         results = query_overpass(query)
 
         maps_search = f"🗺 Google Maps: https://maps.google.com/?q=hospitals+near+{quote(city)}"
-        if results is None:  # every map server failed
+        if results is None:  # every Overpass server failed → try Nominatim
+            places = search_places_nominatim("hospital", city, {"hospital", "clinic", "doctors"})
+            if places:
+                return format_nominatim_places(
+                    places, f"📍 Searching near: {display}\n\n🏥 Nearby Medical Facilities:\n\n")
             return (f"📍 Searching near: {display}\n\n"
                     f"The map service is busy right now, so I couldn't load the list.\n{maps_search}")
         if not results:  # the search worked but found nothing

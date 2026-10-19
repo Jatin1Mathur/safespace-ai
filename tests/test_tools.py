@@ -117,3 +117,27 @@ def test_clinic_search_shows_friendly_message_when_map_service_is_down(monkeypat
     assert "busy" in text
     assert "maps.google.com" in text
     assert "HTTPSConnectionPool" not in text
+
+
+def test_clinic_search_uses_nominatim_when_overpass_is_down(monkeypatch):
+    class Geo:
+        status_code = 200
+        def __init__(self, data): self._data = data
+        def json(self): return self._data
+
+    def fake_get(url, params=None, **kwargs):
+        if params and params["q"] == "Stuttgart":          # city → coordinates
+            return Geo([{"lat": "48.78", "lon": "9.18", "display_name": "Stuttgart, Germany"}])
+        return Geo([                                         # "hospital in Stuttgart"
+            {"class": "amenity", "type": "hospital", "name": "Katharinenhospital",
+             "display_name": "Katharinenhospital, 60, Kriegsbergstraße, Universität, Stuttgart"},
+            {"class": "place", "type": "city", "name": "Stuttgart", "display_name": "Stuttgart"},
+        ])
+
+    monkeypatch.setattr(tools.requests, "get", fake_get)
+    monkeypatch.setattr(tools, "query_overpass", lambda query: None)   # all Overpass servers down
+
+    text = find_clinics_by_city("Stuttgart")
+    assert "Katharinenhospital" in text
+    assert "busy" not in text
+    assert "• Stuttgart" not in text          # only real hospitals, not the city itself
