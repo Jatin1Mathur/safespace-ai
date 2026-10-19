@@ -2,6 +2,7 @@ import ollama
 import requests
 import json
 import os
+import time
 from urllib.parse import quote
 from datetime import datetime
 from twilio.rest import Client
@@ -258,8 +259,17 @@ OVERPASS_SERVERS = [
 ]
 
 
-def query_overpass(query: str, timeout: int = 10) -> list | None:
+# When every Overpass server failed, skip them for a few minutes so the user
+# doesn't wait ~30 s each time before the Nominatim backup is used.
+OVERPASS_COOLDOWN_SECONDS = 300
+_overpass_down_until = 0.0
+
+
+def query_overpass(query: str, timeout: int = 6) -> list | None:
     """Run an Overpass query; return its elements, or None if every server failed."""
+    global _overpass_down_until
+    if time.time() < _overpass_down_until:
+        return None  # all servers failed recently: go straight to the backup
     for url in OVERPASS_SERVERS:
         try:
             response = requests.get(
@@ -270,6 +280,7 @@ def query_overpass(query: str, timeout: int = 10) -> list | None:
                 return response.json().get("elements", [])
         except (requests.RequestException, ValueError):
             pass  # timeout, connection error or invalid JSON: try the next server
+    _overpass_down_until = time.time() + OVERPASS_COOLDOWN_SECONDS
     return None
 
 

@@ -157,3 +157,22 @@ def test_failed_twilio_call_gives_calm_message(monkeypatch):
     text = tools.call_emergency()
     assert "112" in text
     assert "twilio" not in text.lower()
+
+
+def test_dead_overpass_servers_are_skipped_for_a_while(monkeypatch):
+    """After every server failed once, the next search must not wait for them again."""
+    import requests
+    import tools
+
+    calls = []
+
+    def always_timeout(url, *args, **kwargs):
+        calls.append(url)
+        raise requests.Timeout("simulated")
+
+    monkeypatch.setattr(tools.requests, "get", always_timeout)
+    assert tools.query_overpass("q") is None
+    assert len(calls) == len(tools.OVERPASS_SERVERS)
+
+    assert tools.query_overpass("q") is None  # second search: servers skipped
+    assert len(calls) == len(tools.OVERPASS_SERVERS)

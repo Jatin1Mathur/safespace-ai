@@ -7,3 +7,5 @@ def isolated_memory(tmp_path, monkeypatch):
     import tools
 
     monkeypatch.setattr(tools, "MEMORY_FILE", str(tmp_path / "session_memory.json"))
+    # Each test starts with the map servers "not known to be down"
+    monkeypatch.setattr(tools, "_overpass_down_until", 0.0)
