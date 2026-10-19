@@ -358,27 +358,31 @@ footer,
 
 .quickbar {
     display: flex;
-    gap: 9px;
-    flex-wrap: wrap;
+    gap: 9px !important;
+    flex-wrap: wrap !important;
     margin: 0 0 14px;
+    background: transparent !important;
+    border: none !important;
 }
 
 .quick-btn {
-    border: 1px solid var(--border);
-    color: var(--text-soft);
-    background: rgba(255,255,255,0.045);
-    border-radius: 999px;
-    padding: 9px 13px;
-    font-size: 0.78rem;
-    font-weight: 600;
+    border: 1px solid var(--border) !important;
+    color: var(--text-soft) !important;
+    background: rgba(255,255,255,0.045) !important;
+    border-radius: 999px !important;
+    padding: 9px 13px !important;
+    font-size: 0.78rem !important;
+    font-weight: 600 !important;
     cursor: pointer;
     transition: 180ms ease;
+    box-shadow: none !important;
+    flex: 0 0 auto !important;
 }
 
 .quick-btn:hover {
-    color: white;
-    border-color: var(--border-strong);
-    background: rgba(16, 185, 129, 0.12);
+    color: white !important;
+    border-color: var(--border-strong) !important;
+    background: rgba(16, 185, 129, 0.12) !important;
     transform: translateY(-1px);
 }
 
@@ -683,6 +687,17 @@ footer,
 """
 
 
+QUICK_PROMPTS = [
+    ("😟 Feeling anxious", "I am feeling anxious today"),
+    ("🏥 Find hospitals", "Find hospitals in Hof"),
+    ("💊 Find pharmacy", "Find pharmacy near me"),
+    ("😴 Sleep issues", "I am having trouble sleeping"),
+    ("🌊 Overwhelmed", "I feel overwhelmed"),
+    ("🫁 Breathing", "Give me a breathing exercise"),
+    ("📊 Mood history", "Show my mood history"),
+    ("📞 Hotlines", "Give me crisis hotline numbers"),
+]
+
 with gr.Blocks(title="SafeSpace AI") as demo:
     gr.HTML('<div class="ss-shell">')
 
@@ -722,36 +737,13 @@ with gr.Blocks(title="SafeSpace AI") as demo:
                 """
             )
 
-            gr.HTML(
-                """
-                <div class="quickbar">
-                    <button class="quick-btn" onclick="setMsg('I am feeling anxious today')">😟 Feeling anxious</button>
-                    <button class="quick-btn" onclick="setMsg('Find hospitals in Hof')">🏥 Find hospitals</button>
-                    <button class="quick-btn" onclick="setMsg('Find pharmacy near me')">💊 Find pharmacy</button>
-                    <button class="quick-btn" onclick="setMsg('I am having trouble sleeping')">😴 Sleep issues</button>
-                    <button class="quick-btn" onclick="setMsg('I feel overwhelmed')">🌊 Overwhelmed</button>
-                    <button class="quick-btn" onclick="setMsg('Give me a breathing exercise')">🫁 Breathing</button>
-                    <button class="quick-btn" onclick="setMsg('Show my mood history')">📊 Mood history</button>
-                    <button class="quick-btn" onclick="setMsg('Give me crisis hotline numbers')">📞 Hotlines</button>
-                </div>
-
-                <script>
-                function setMsg(text) {
-                    const ta = document.querySelector('#msg-input textarea');
-                    if (!ta) return;
-
-                    const nativeSetter = Object.getOwnPropertyDescriptor(
-                        window.HTMLTextAreaElement.prototype,
-                        'value'
-                    ).set;
-
-                    nativeSetter.call(ta, text);
-                    ta.dispatchEvent(new Event('input', { bubbles: true }));
-                    ta.focus();
-                }
-                </script>
-                """
-            )
+            # Real Gradio buttons: Gradio does not run <script> tags inside gr.HTML,
+            # so HTML buttons with onclick handlers could never work.
+            with gr.Row(elem_classes="quickbar"):
+                quick_buttons = [
+                    (gr.Button(label, elem_classes="quick-btn", size="sm", min_width=0, scale=0), prompt)
+                    for label, prompt in QUICK_PROMPTS
+                ]
 
             chatbot = gr.Chatbot(
                 elem_id="chatbot",
@@ -917,6 +909,18 @@ with gr.Blocks(title="SafeSpace AI") as demo:
         inputs=[chatbot, tool_log],
         outputs=[history_state, tool_log_state],
     )
+
+    for button, prompt in quick_buttons:
+        quick_event = button.click(fn=lambda p=prompt: p, outputs=msg).then(
+            fn=chat,
+            inputs=[msg, history_state, tool_log_state, mood_label, session_stats, risk_status],
+            outputs=[chatbot, msg, tool_log, mood_label, session_stats, risk_status],
+        )
+        quick_event.then(
+            fn=lambda h, t: (h, t),
+            inputs=[chatbot, tool_log],
+            outputs=[history_state, tool_log_state],
+        )
 
     clear_event = clear_btn.click(
         fn=clear_chat,
