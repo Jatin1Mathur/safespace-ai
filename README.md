@@ -6,6 +6,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/Jatin1Mathur/safespace-ai/actions/workflows/ci.yml"><img src="https://github.com/Jatin1Mathur/safespace-ai/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/Python-3.14-3776AB?style=flat&logo=python&logoColor=white" alt="Python 3.14">
   <img src="https://img.shields.io/badge/LangGraph-agent-1C3C3C?style=flat&logo=langchain&logoColor=white" alt="LangGraph">
   <img src="https://img.shields.io/badge/FastAPI-backend-009688?style=flat&logo=fastapi&logoColor=white" alt="FastAPI">
@@ -362,7 +363,8 @@ Open **http://localhost:7860**.
 
 ### Run the tests
 ```bash
-uv run pytest
+uv run ruff check .   # lint
+uv run pytest         # tests
 ```
 The tests replace Twilio, Ollama and the location lookups with fakes, so they run offline and never place a real call.
 
