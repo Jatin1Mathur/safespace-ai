@@ -1,372 +1,93 @@
-import re
+"""FastAPI service in front of the SafeSpace LangGraph agent."""
 
+import logging
+import uuid
+from typing import Any
+
+import agent_graph
 import uvicorn
-from ai_agent import SYSTEM_PROMPT, graph, parse_response
-from fastapi import FastAPI
-from pydantic import BaseModel
-from tools import (
-    assess_crisis_risk,
-    call_emergency,
-    detect_mood,
-    find_clinics_by_city,
-    find_pharmacies,
-    generate_session_summary,
-    generate_soap_note,
-    get_breathing_exercise,
-    get_crisis_hotlines,
-    get_mood_summary,
-    get_sleep_advice,
-    load_memory,
-    log_mood,
-)
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+from routing import RiskLevel, Route
 
-app = FastAPI()
+logger = logging.getLogger("safespace")
 
-# Store session history in memory
-session_history = []
+app = FastAPI(title="SafeSpace AI", version="0.2.0")
 
-class Query(BaseModel):
+
+# ── Request / response models ────────────────────────────────────────────────
+
+class AskRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=4000, description="The user's message.")
+    thread_id: str | None = Field(
+        None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$",
+        description="Conversation id. Omit to start a new conversation; reuse it to continue one.")
+
+
+class AskResponse(BaseModel):
+    response: str
+    tool_called: str
+    route: Route
+    mood: str
+    risk: RiskLevel
+    thread_id: str
+
+
+class ErrorDetail(BaseModel):
+    code: str
     message: str
-
-
-# ── Keyword lists ────────────────────────────────────────────────────────────
-
-HEALTH_KEYWORDS = [
-    # Mental health
-    "anxiety", "anxious", "stress", "stressed", "depression", "depressed",
-    "sad", "lonely", "overwhelmed", "panic", "trauma", "grief", "anger",
-    "mood", "emotion", "feeling", "feel", "mental", "therapy", "therapist",
-    "counselor", "psychologist", "psychiatrist", "burnout", "exhausted",
-    "hopeless", "worthless", "fear", "phobia", "ocd", "ptsd", "bipolar",
-    "schizophrenia", "eating disorder", "addiction", "sleep", "insomnia",
-    # Physical / medical
-    "hospital", "clinic", "doctor", "medical", "pharmacy", "medicine",
-    "medication", "prescription", "symptoms", "pain", "health", "sick",
-    "ill", "disease", "diagnosis", "treatment", "nurse", "emergency",
-    "urgent", "injury", "headache", "breathing", "chest", "heart",
-    # Crisis
-    "suicide", "self harm", "self-harm", "kill myself", "hurt myself",
-    "want to die", "end my life", "crisis", "help me", "no reason",
-    # Tools
-    "near me", "nearby", "find", "locate", "hotline", "helpline",
-    "breathe", "breathing", "meditate", "meditation", "relax", "calm",
-    "summary", "mood history", "how am i", "progress",
-    # Greetings / general support (allow these)
-    "hello", "hi", "hey", "thanks", "thank you", "yes", "no", "okay",
-    "please", "help", "support", "talk", "listen", "need someone",
-    "not okay", "struggling", "difficult", "hard time", "bad day",
-]
-
-CLINIC_KEYWORDS = [
-    "hospital", "clinic", "doctor", "medical", "facility",
-    "health center", "urgent care", "emergency room", "arzt",
-    "krankenhaus", "klinik", "find doctor"
-]
-
-PHARMACY_KEYWORDS = [
-    "pharmacy", "pharmacie", "apotheke", "medicine", "medication",
-    "prescription", "drug store", "pills"
-]
-
-EMERGENCY_KEYWORDS = [
-    "suicide", "kill myself", "end my life", "self harm", "self-harm",
-    "want to die", "no reason to live", "hurt myself", "overdose"
-]
-
-BREATHING_KEYWORDS = [
-    "breathing", "breathe", "panic attack", "can't breathe",
-    "anxious right now", "calm down", "relax", "meditation"
-]
-
-SLEEP_KEYWORDS = [
-    "sleep", "insomnia", "can't sleep", "trouble sleeping",
-    "wake up", "nightmares", "tired", "fatigue", "rest"
-]
-
-MOOD_KEYWORDS = [
-    "mood history", "how have i been", "my mood", "mood tracker",
-    "emotional pattern", "progress", "how am i doing"
-]
-
-HOTLINE_KEYWORDS = [
-    "hotline", "helpline", "crisis line", "phone number",
-    "who can i call", "emergency contact", "crisis help"
-]
-
-SUMMARY_KEYWORDS = [
-    "summarize", "summary", "what did we talk", "session summary",
-    "recap", "what have i shared"
-]
-
-SOAP_KEYWORDS = [
-    "soap note", "clinical report", "session report", "generate report",
-    "doctor report", "medical report", "clinical note", "generate soap",
-    "soap", "icd", "clinical document"
-]
-
-GREETINGS = {"hi", "hey", "hello", "hallo", "hi there", "hey there",
-             "good morning", "good evening", "guten tag", "moin"}
-
-GREETING_RESPONSE = """🌿 Hi, I'm SafeSpace, an AI support assistant (not a therapist).
-
-You can talk to me about how you're feeling, ask for a breathing exercise or sleep tips,
-or find hospitals, pharmacies and crisis hotlines. How are you doing today? 💚"""
-
-
-def is_greeting(message: str) -> bool:
-    """True for a plain greeting like "hey" or "Hello!"."""
-    return message.lower().strip(" !.,?") in GREETINGS
-
-
-def looks_like_raw_tool_call(text: str) -> bool:
-    """Small local models sometimes write a tool call as plain JSON text
-    (e.g. {"name": "breathing_exercise_tool", "parameters": {...}})
-    instead of really calling the tool. That must never reach the user."""
-    return bool(re.search(r'"name"\s*:\s*"\w+"', text)) and (
-        '"parameters"' in text or '"arguments"' in text)
-
-
-OFF_TOPIC_RESPONSE = """🌿 I'm SafeSpace — a mental health and medical support assistant.
-
-I'm here to help with:
-• 💬 Mental health support & emotional guidance
-• 🏥 Finding hospitals, clinics & pharmacies nearby
-• 🫁 Breathing exercises & relaxation techniques
-• 😴 Sleep improvement advice
-• 📞 Crisis hotlines & emergency support
-• 📊 Mood tracking & session summaries
-
-I'm not able to help with topics outside of healthcare and wellbeing. Is there something health-related I can support you with today? 💚"""
-
-
-def _keyword_pattern(keyword: str) -> re.Pattern:
-    """Match a keyword at a word start, so "hi" no longer matches "history".
-
-    Keywords of up to 3 letters (hi, yes, ill, sad...) must match a whole word;
-    longer ones may continue ("feel" still matches "feeling").
-    """
-    escaped = re.escape(keyword)
-    if len(keyword) <= 3:
-        return re.compile(rf"\b{escaped}\b")
-    return re.compile(rf"\b{escaped}")
-
-
-HEALTH_PATTERNS = [_keyword_pattern(kw) for kw in HEALTH_KEYWORDS]
-
-
-def _patterns(keywords: list) -> list:
-    return [_keyword_pattern(kw) for kw in keywords]
-
-
-def mentions(msg: str, patterns: list) -> bool:
-    """Word-boundary keyword match, so "rest" no longer matches "nearest"."""
-    return any(pattern.search(msg) for pattern in patterns)
-
-
-BREATHING_PATTERNS = _patterns(BREATHING_KEYWORDS)
-SLEEP_PATTERNS = _patterns(SLEEP_KEYWORDS)
-MOOD_PATTERNS = _patterns(MOOD_KEYWORDS)
-HOTLINE_PATTERNS = _patterns(HOTLINE_KEYWORDS)
-SUMMARY_PATTERNS = _patterns(SUMMARY_KEYWORDS)
-SOAP_PATTERNS = _patterns(SOAP_KEYWORDS)
-PHARMACY_PATTERNS = _patterns(PHARMACY_KEYWORDS)
-CLINIC_PATTERNS = _patterns(CLINIC_KEYWORDS)
-
-
-def is_health_related(message: str) -> bool:
-    """Check if message is related to health/mental health."""
-    msg_lower = message.lower()
-    # Allow short messages (greetings, yes/no responses)
-    if len(message.strip()) < 15:
-        return True
-    return any(pattern.search(msg_lower) for pattern in HEALTH_PATTERNS)
-
-
-def extract_city(message: str) -> str:
-    """Extract city name from message."""
-    skip = {"find", "hospital", "hospitals", "clinic", "clinics", "doctor",
-            "doctors", "medical", "near", "nearby", "in", "at", "around",
-            "me", "my", "area", "please", "show", "get", "a", "the",
-            "pharmacy", "pharmacies", "health", "center"}
-    for word in message.split():
-        if word.lower() not in skip and len(word) > 2 and word[0].isupper():
-            return word
-    # fallback: any word not in skip
-    for word in message.split():
-        if word.lower() not in skip and len(word) > 2:
-            return word
-    return ""
-
-
-@app.post("/ask")
-async def ask(query: Query):
-    global session_history
-    msg = query.message.lower()
-    original = query.message
-
-    # ── Health topic filter ──────────────────────────────────────────────────
-    if not is_health_related(original):
-        return {
-            "response": OFF_TOPIC_RESPONSE,
-            "tool_called": "topic_filter",
-            "mood": "neutral",
-            "risk": "NONE"
-        }
-
-    # ── Crisis risk assessment ───────────────────────────────────────────────
-    risk = assess_crisis_risk(original)
-
-    # ── Mood detection & logging ─────────────────────────────────────────────
-    mood = detect_mood(original)
-    if mood != "neutral":
-        log_mood(mood)
-
-    # ── HIGH risk → emergency call immediately ───────────────────────────────
-    if risk["level"] == "HIGH":
-        call_result = call_emergency()
-        hotlines = get_crisis_hotlines()
-        response = f"""🚨 I'm very concerned about what you've shared.
-
-You are not alone, and your life has value.
-
-{hotlines}
-
-Please reach out to one of these lines right now — they are free, confidential, and available 24/7.
-
-{call_result}"""
-        session_history.append({"role": "user", "content": original})
-        session_history.append({"role": "assistant", "content": response})
-        return {"response": response, "tool_called": "emergency_call_tool",
-                "mood": mood, "risk": risk["level"]}
-
-    # ── MEDIUM risk → suggest hotlines + therapy ─────────────────────────────
-    if risk["level"] == "MEDIUM":
-        hotlines = get_crisis_hotlines()
-        ai_response = query_medgemma_safe(original)
-        response = f"{ai_response}\n\n---\n💙 Support is available:\n{hotlines}"
-        session_history.append({"role": "user", "content": original})
-        session_history.append({"role": "assistant", "content": response})
-        return {"response": response, "tool_called": "crisis_support",
-                "mood": mood, "risk": risk["level"]}
-
-    # ── Greeting ─────────────────────────────────────────────────────────────
-    if is_greeting(original):
-        session_history.append({"role": "user", "content": original})
-        session_history.append({"role": "assistant", "content": GREETING_RESPONSE})
-        return {"response": GREETING_RESPONSE, "tool_called": "greeting",
-                "mood": mood, "risk": risk["level"]}
-
-    # ── Breathing exercise ───────────────────────────────────────────────────
-    if mentions(msg, BREATHING_PATTERNS):
-        technique = "478" if "sleep" in msg else "box"
-        response = get_breathing_exercise(technique)
-        session_history.append({"role": "user", "content": original})
-        session_history.append({"role": "assistant", "content": response})
-        return {"response": response, "tool_called": "breathing_exercise",
-                "mood": mood, "risk": risk["level"]}
-
-    # ── Sleep advice ─────────────────────────────────────────────────────────
-    if mentions(msg, SLEEP_PATTERNS):
-        response = get_sleep_advice(original)
-        session_history.append({"role": "user", "content": original})
-        session_history.append({"role": "assistant", "content": response})
-        return {"response": response, "tool_called": "sleep_advice",
-                "mood": mood, "risk": risk["level"]}
-
-    # ── Mood history ─────────────────────────────────────────────────────────
-    if mentions(msg, MOOD_PATTERNS):
-        response = get_mood_summary()
-        session_history.append({"role": "user", "content": original})
-        session_history.append({"role": "assistant", "content": response})
-        return {"response": response, "tool_called": "mood_tracker",
-                "mood": mood, "risk": risk["level"]}
-
-    # ── Crisis hotlines ───────────────────────────────────────────────────────
-    if mentions(msg, HOTLINE_PATTERNS):
-        response = get_crisis_hotlines()
-        session_history.append({"role": "user", "content": original})
-        session_history.append({"role": "assistant", "content": response})
-        return {"response": response, "tool_called": "hotline_directory",
-                "mood": mood, "risk": risk["level"]}
-
-    # ── Session summary ───────────────────────────────────────────────────────
-    if mentions(msg, SUMMARY_PATTERNS):
-        response = generate_session_summary(session_history)
-        session_history.append({"role": "user", "content": original})
-        session_history.append({"role": "assistant", "content": response})
-        return {"response": response, "tool_called": "session_summary",
-                "mood": mood, "risk": risk["level"]}
-
-
-    # ── SOAP Note Generator ───────────────────────────────────────────────────
-    if mentions(msg, SOAP_PATTERNS):
-        memory = load_memory()
-        mood_history = memory.get("mood_history", [])
-        response = generate_soap_note(session_history, mood_history)
-        session_history.append({"role": "user", "content": original})
-        session_history.append({"role": "assistant", "content": response})
-        return {"response": response, "tool_called": "soap_note_generator",
-                "mood": mood, "risk": risk["level"]}
-
-    # ── Pharmacy finder ───────────────────────────────────────────────────────
-    if mentions(msg, PHARMACY_PATTERNS):
-        response = find_pharmacies()
-        session_history.append({"role": "user", "content": original})
-        session_history.append({"role": "assistant", "content": response})
-        return {"response": response, "tool_called": "pharmacy_finder",
-                "mood": mood, "risk": risk["level"]}
-
-    # ── Clinic/hospital finder ────────────────────────────────────────────────
-    if mentions(msg, CLINIC_PATTERNS):
-        city = extract_city(original)
-        if city:
-            response = find_clinics_by_city(city)
-        else:
-            response = "📍 Which city should I search in?\n\nFor example: *find hospitals in Hof* or *clinics in Munich*"
-        session_history.append({"role": "user", "content": original})
-        session_history.append({"role": "assistant", "content": response})
-        return {"response": response, "tool_called": "clinic_finder",
-                "mood": mood, "risk": risk["level"]}
-
-    # ── General AI agent (mental health conversation) ─────────────────────────
-    inputs = {
-        "messages": [
-            ("system", SYSTEM_PROMPT),
-            ("user", original)
-        ]
-    }
-    try:
-        stream = graph.stream(inputs, stream_mode="updates")
-        tool_called_name, final_response = parse_response(stream)
-    except Exception:
-        # e.g. Ollama is not running: never crash, use the fallback below
-        tool_called_name, final_response = "None", None
-
-    # If the agent gave no answer, or wrote a tool call as text instead of
-    # running it, fall back to a direct MedGemma answer.
-    if not final_response or looks_like_raw_tool_call(final_response):
-        final_response = query_medgemma_safe(original)
-        tool_called_name = "medgemma_fallback"
-
-    session_history.append({"role": "user", "content": original})
-    session_history.append({"role": "assistant", "content": final_response or ""})
-
-    # Keep history manageable
-    if len(session_history) > 40:
-        session_history = session_history[-40:]
-
-    return {
-        "response": final_response,
-        "tool_called": tool_called_name,
-        "mood": mood,
-        "risk": risk["level"]
-    }
-
-
-def query_medgemma_safe(prompt: str) -> str:
-    """MedGemma with safe messaging for medium-risk cases."""
-    from tools import query_medgemma
-    return query_medgemma(prompt)
+    details: list[dict[str, Any]] = []
+
+
+class ErrorResponse(BaseModel):
+    error: ErrorDetail
+
+
+# ── Structured errors ────────────────────────────────────────────────────────
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError):
+    details = [{"field": ".".join(str(p) for p in err["loc"][1:]), "problem": err["msg"]}
+               for err in exc.errors()]
+    body = ErrorResponse(error=ErrorDetail(code="invalid_request",
+                                           message="The request body is not valid.",
+                                           details=details))
+    return JSONResponse(status_code=422, content=body.model_dump())
+
+
+@app.exception_handler(Exception)
+async def unexpected_error_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled error on %s", request.url.path)
+    body = ErrorResponse(error=ErrorDetail(
+        code="internal_error",
+        message="Something went wrong. If you are in danger, call 112 (EU) or your local emergency number."))
+    return JSONResponse(status_code=500, content=body.model_dump())
+
+
+# ── Endpoints ────────────────────────────────────────────────────────────────
+
+@app.get("/health")
+def health() -> dict:
+    return {"status": "ok"}
+
+
+@app.post("/ask", response_model=AskResponse,
+          responses={422: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
+def ask(query: AskRequest) -> AskResponse:
+    # Plain `def`: FastAPI runs it in a worker thread, so a slow model call
+    # doesn't block the event loop for other users.
+    thread_id = query.thread_id or uuid.uuid4().hex
+    state = agent_graph.run_turn(query.message, thread_id)
+    return AskResponse(
+        response=str(state["messages"][-1].content),
+        tool_called=state.get("tool_called", "None"),
+        route=state["route"],
+        mood=state.get("mood", "neutral"),
+        risk=state.get("risk", "NONE"),
+        thread_id=thread_id,
+    )
 
 
 if __name__ == "__main__":

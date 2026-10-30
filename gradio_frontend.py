@@ -1,4 +1,5 @@
 import os
+import uuid
 from datetime import datetime
 
 import gradio as gr
@@ -54,9 +55,26 @@ def is_technical_error_message(text: str) -> bool:
     return any(keyword in lower_text for keyword in TECHNICAL_ERROR_KEYWORDS)
 
 
-def call_backend(message: str) -> tuple[str, str, str, str]:
+# Browser session -> backend conversation thread. "New session" starts a new thread.
+_THREADS: dict[str, str] = {}
+
+
+def thread_for(request) -> str:
+    session = getattr(request, "session_hash", None) or "local"
+    return _THREADS.setdefault(session, uuid.uuid4().hex)
+
+
+def reset_thread(request) -> None:
+    session = getattr(request, "session_hash", None) or "local"
+    _THREADS[session] = uuid.uuid4().hex
+
+
+def call_backend(message: str, thread_id: str | None = None) -> tuple[str, str, str, str]:
     try:
-        res = requests.post(BACKEND_URL, json={"message": message}, timeout=300)
+        payload = {"message": message}
+        if thread_id:
+            payload["thread_id"] = thread_id
+        res = requests.post(BACKEND_URL, json=payload, timeout=300)
         res.raise_for_status()
         data = res.json()
 
@@ -111,11 +129,12 @@ def chat(
     mood_display: str,
     session_stats: str,
     risk_status: str,
+    request: gr.Request = None,
 ):
     if not user_message or not user_message.strip():
         return history, "", tool_log, mood_display, session_stats, risk_status
 
-    response, tool_called, mood, risk = call_backend(user_message.strip())
+    response, tool_called, mood, risk = call_backend(user_message.strip(), thread_for(request))
 
     history = history or []
 
@@ -149,7 +168,8 @@ def chat(
     return history, "", tool_log, mood_display, session_stats, risk_status
 
 
-def clear_chat():
+def clear_chat(request: gr.Request = None):
+    reset_thread(request)
     return (
         [],
         "",
