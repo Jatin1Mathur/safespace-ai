@@ -31,3 +31,8 @@ jobs:
       #    replaced with fakes in the tests, so no models or keys are needed.
       - name: Run tests
         run: uv run pytest -v
+
+      # 6. Print the golden-dataset scores for the router (the regression
+      #    gates themselves run inside pytest in tests/test_evals.py)
+      - name: Evaluation report
+        run: uv run python evals/run_eval.py
