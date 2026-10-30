@@ -1,13 +1,30 @@
+"""ReAct agent and its tools.
+
+Every tool has an explicit Pydantic argument schema. LangChain validates the
+model's tool-call arguments against it before the function runs, so a
+malformed call (empty city, unknown breathing technique, ...) is rejected
+instead of executed.
+
+The emergency call is deliberately NOT exposed to the model: placing a phone
+call is an irreversible action, so it only happens on the deterministic
+crisis path in the graph (see agent_graph.py).
+"""
+
+import os
 import warnings
 
 # Silence library deprecation warnings before the imports below trigger them
 warnings.filterwarnings("ignore")
 
-from langchain.tools import tool  # noqa: E402
+from typing import Literal  # noqa: E402
+
+from langchain.agents import create_agent  # noqa: E402
+from langchain_core.messages import AIMessage, AnyMessage, ToolMessage  # noqa: E402
+from langchain_core.tools import tool  # noqa: E402
 from langchain_ollama import ChatOllama  # noqa: E402
-from langgraph.prebuilt import create_react_agent  # noqa: E402
+from pydantic import BaseModel, Field  # noqa: E402
 from tools import (  # noqa: E402
-    call_emergency,
+    OLLAMA_TIMEOUT,
     find_clinics_by_city,
     find_pharmacies,
     get_breathing_exercise,
@@ -16,33 +33,48 @@ from tools import (  # noqa: E402
     query_medgemma,
 )
 
+AGENT_MODEL = os.getenv("AGENT_MODEL", "llama3.2")
 
-@tool
+
+# ── Tool argument schemas ────────────────────────────────────────────────────
+
+class SpecialistArgs(BaseModel):
+    query: str = Field(..., min_length=1, max_length=2000,
+                       description="The user's message or question, in their own words.")
+
+
+class LocationArgs(BaseModel):
+    location: str = Field(..., min_length=2, max_length=80, pattern=r"^[^\d{}<>\[\]]+$",
+                          description="City or region name, e.g. 'Stuttgart'.")
+
+
+class CityArgs(BaseModel):
+    city: str = Field(..., min_length=2, max_length=80, pattern=r"^[^\d{}<>\[\]]+$",
+                      description="City name to search in, e.g. 'Munich'.")
+
+
+class BreathingArgs(BaseModel):
+    technique: Literal["box", "478", "calm"] = Field(
+        "box", description="'box' for anxiety, '478' for sleep, 'calm' for a gentle start.")
+
+
+class NoArgs(BaseModel):
+    """This tool takes no arguments."""
+
+
+# ── Tools ────────────────────────────────────────────────────────────────────
+
+@tool(args_schema=SpecialistArgs)
 def ask_mental_health_specialist(query: str) -> str:
-    """
-    Generate a therapeutic response using the MedGemma model.
-    Use this for all general user queries, mental health questions, emotional concerns,
-    or to offer empathetic, evidence-based guidance in a conversational tone.
-    """
+    """Generate a supportive, empathetic answer with the MedGemma model.
+    Use this for general emotional and mental-health conversation."""
     return query_medgemma(query)
 
 
-@tool
-def emergency_call_tool() -> str:
-    """
-    Place an emergency call via Twilio.
-    Use this IMMEDIATELY if the user expresses suicidal ideation,
-    intent to self-harm, or describes a mental health emergency.
-    """
-    return call_emergency()
-
-
-@tool
+@tool(args_schema=LocationArgs)
 def find_nearby_therapists_by_location(location: str) -> str:
-    """
-    Explains how to find a licensed therapist near the specified location.
-    Use when the user asks for a therapist, psychologist or counsellor.
-    """
+    """Explain how to find a licensed therapist near the given location.
+    Use when the user asks for a therapist, psychologist or counsellor."""
     # No live therapist directory is integrated, so point to official
     # services instead of returning names or numbers that could be wrong.
     return (
@@ -57,54 +89,38 @@ def find_nearby_therapists_by_location(location: str) -> str:
     )
 
 
-@tool
+@tool(args_schema=CityArgs)
 def nearby_clinics_tool(city: str) -> str:
-    """
-    Finds real hospitals and clinics near a given city using OpenStreetMap.
-    Use when user asks for hospitals, clinics, or medical facilities.
-    """
+    """Find real hospitals and clinics in a city using OpenStreetMap."""
     return find_clinics_by_city(city)
 
 
-@tool
+@tool(args_schema=NoArgs)
 def nearby_pharmacy_tool() -> str:
-    """
-    Finds pharmacies near the user's current location automatically.
-    Use when user asks for pharmacy or medication.
-    """
+    """Find pharmacies near the user's current location."""
     return find_pharmacies()
 
 
-@tool
+@tool(args_schema=NoArgs)
 def crisis_hotlines_tool() -> str:
-    """
-    Returns crisis helpline numbers based on user's location.
-    Use when user needs a hotline or crisis support number.
-    """
+    """Return crisis helpline numbers for the user's country."""
     return get_crisis_hotlines()
 
 
-@tool
-def breathing_exercise_tool() -> str:
-    """
-    Provides a guided breathing exercise.
-    Use when user is anxious, panicking, or needs to calm down.
-    """
-    return get_breathing_exercise("box")
+@tool(args_schema=BreathingArgs)
+def breathing_exercise_tool(technique: str = "box") -> str:
+    """Give a guided breathing exercise for anxiety, panic or trouble sleeping."""
+    return get_breathing_exercise(technique)
 
 
-@tool
+@tool(args_schema=NoArgs)
 def sleep_advice_tool() -> str:
-    """
-    Provides CBT-based sleep hygiene advice.
-    Use when user mentions sleep problems or insomnia.
-    """
+    """Give CBT-based sleep hygiene advice for sleep problems or insomnia."""
     return get_sleep_advice()
 
 
 tools = [
     ask_mental_health_specialist,
-    emergency_call_tool,
     find_nearby_therapists_by_location,
     nearby_clinics_tool,
     nearby_pharmacy_tool,
@@ -113,49 +129,48 @@ tools = [
     sleep_advice_tool,
 ]
 
-llm = ChatOllama(model="llama3.2", temperature=0.2)
-
-graph = create_react_agent(llm, tools=tools)
-
 SYSTEM_PROMPT = """
-You are SafeSpace AI, a compassionate mental health and medical support assistant.
+You are SafeSpace AI, a supportive mental-health and medical information assistant.
+You are not a doctor or therapist and never claim to be one.
 You ONLY discuss health, mental health, and medical topics.
 If asked about anything unrelated to health, politely redirect to health topics.
 
-You have access to these tools:
-1. `ask_mental_health_specialist` - for all emotional and mental health queries
-2. `emergency_call_tool` - IMMEDIATELY if user is in crisis or suicidal
-3. `find_nearby_therapists_by_location` - explain how to find a licensed therapist
-4. `nearby_clinics_tool` - find hospitals/clinics by city name
-5. `nearby_pharmacy_tool` - find pharmacies near user
-6. `crisis_hotlines_tool` - get crisis helpline numbers
-7. `breathing_exercise_tool` - guided breathing for anxiety/panic
-8. `sleep_advice_tool` - help with sleep problems
+Use the tools when they help:
+1. `ask_mental_health_specialist` - emotional and mental-health conversation
+2. `find_nearby_therapists_by_location` - how to find a licensed therapist
+3. `nearby_clinics_tool` - hospitals/clinics by city name
+4. `nearby_pharmacy_tool` - pharmacies near the user
+5. `crisis_hotlines_tool` - crisis helpline numbers
+6. `breathing_exercise_tool` - guided breathing for anxiety/panic
+7. `sleep_advice_tool` - help with sleep problems
 
-Always respond with warmth, empathy, and professionalism.
-Never ignore signs of distress or crisis.
+You can see earlier messages of this conversation; use them for context.
+Always respond with warmth and professionalism, and never ignore signs of distress.
 """
 
 
-def parse_response(stream):
-    tool_called_name = "None"
+def build_react_agent(model: str = AGENT_MODEL, llm=None):
+    """Build the ReAct agent (reason -> call tool -> observe -> answer)."""
+    llm = llm or ChatOllama(model=model, temperature=0.2,
+                            client_kwargs={"timeout": OLLAMA_TIMEOUT})
+    return create_agent(llm, tools=tools, system_prompt=SYSTEM_PROMPT)
+
+
+react_agent = build_react_agent()
+
+
+def summarize_agent_run(new_messages: list[AnyMessage]) -> tuple[str, str | None, dict]:
+    """Return (last tool called, final answer, token usage) from an agent run."""
+    tool_called = "None"
     final_response = None
-
-    for s in stream:
-        tool_data = s.get('tools')
-        if tool_data:
-            tool_messages = tool_data.get('messages')
-            if tool_messages and isinstance(tool_messages, list):
-                for msg in tool_messages:
-                    tool_called_name = getattr(msg, 'name', 'None')
-
-        agent_data = s.get('agent')
-        if agent_data:
-            messages = agent_data.get('messages')
-            if messages and isinstance(messages, list):
-                for msg in messages:
-                    if msg.content:
-                        final_response = msg.content
-
-    return tool_called_name, final_response
-        
+    usage = {"input_tokens": 0, "output_tokens": 0}
+    for msg in new_messages:
+        if isinstance(msg, ToolMessage):
+            tool_called = msg.name or "None"
+        elif isinstance(msg, AIMessage):
+            meta = getattr(msg, "usage_metadata", None) or {}
+            usage["input_tokens"] += meta.get("input_tokens", 0)
+            usage["output_tokens"] += meta.get("output_tokens", 0)
+            if msg.content and not msg.tool_calls:
+                final_response = msg.content if isinstance(msg.content, str) else str(msg.content)
+    return tool_called, final_response, usage

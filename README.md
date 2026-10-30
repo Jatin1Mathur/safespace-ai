@@ -37,10 +37,11 @@
 12. [Project Structure](#-project-structure)
 13. [Getting Started](#-getting-started)
 14. [API](#-api)
-15. [Comparisons](#%EF%B8%8F-comparisons)
-16. [Results, Limitations and Future Work](#-results-limitations-and-future-work)
-17. [References](#-references)
-18. [Author](#-author)
+15. [Evaluation](#-evaluation)
+16. [Comparisons](#%EF%B8%8F-comparisons)
+17. [Results, Limitations and Future Work](#-results-limitations-and-future-work)
+18. [References](#-references)
+19. [Author](#-author)
 
 ---
 
@@ -131,21 +132,31 @@ flowchart LR
 
 > **LangGraph is not the AI model. It is the workflow framework around the model.**
 
+SafeSpace is built as an explicit `StateGraph` (`backend/agent_graph.py`):
+
 ```mermaid
 flowchart LR
-    S([START]) --> L[LLM node<br/>reasoning step]
-    L --> R{Router<br/>choose path}
-    R -->|tool needed| T[Tool node<br/>execute action]
-    T --> L
-    R -->|done| E([END<br/>response])
+    S([START]) --> R{router<br/>deterministic:<br/>risk · intent · topic}
+    R -->|crisis_high / crisis_medium| C[crisis<br/>hotlines · escalation]
+    R -->|greeting, breathing, clinic, …| F[fixed_response<br/>known tool answer]
+    R -->|open conversation| A[agent<br/>ReAct loop with tools]
+    C --> E([END])
+    F --> E
+    A --> E
 ```
 
-**Shared state** moving through the graph: messages, risk level, selected tool, API results, location data and the final output.
+- **router node** classifies every message *before* any LLM runs (crisis check → greeting → intent rules → topic filter). It is a pure function, so it is fast, testable and scored by the evaluation suite.
+- **conditional edges** send the turn to one of three nodes. High-risk messages never reach model-generated text.
+- **agent node** runs a ReAct agent (`langchain.agents.create_agent`) that reasons, calls tools and observes their results; if the model fails or writes a tool call as plain text, it falls back to MedGemma.
+- **Typed shared state** (`SafeSpaceState`): messages, route, risk, mood, tool called, token usage.
+- **Memory:** an `InMemorySaver` checkpointer keyed by `thread_id`. Each conversation has its own history; the agent sees the last 12 messages of *its* thread, and session summaries and SOAP notes only use that thread.
 
 ```python
-# In code
-graph = create_react_agent(llm, tools=[...])
-# Result: a repeatable, debuggable and testable agent workflow
+builder = StateGraph(SafeSpaceState)
+builder.add_node("router", router_node)
+builder.add_conditional_edges("router", select_branch, ["crisis", "fixed_response", "agent"])
+graph = builder.compile(checkpointer=InMemorySaver())
+graph.invoke({"messages": [HumanMessage(text)]}, {"configurable": {"thread_id": tid}})
 ```
 
 ### Why LangGraph fits this project
@@ -180,6 +191,10 @@ Tool calling means the model does not perform every task itself. It **selects a 
 | 📝 Documentation tool | SOAP note generator with ICD-10 style structure |
 | 🛡️ Safety filter | Blocks unrelated or unsafe non-health requests |
 
+Every tool the model can call has an explicit **Pydantic argument schema** (`args_schema`), e.g. `CityArgs(city: str, 2–80 chars, no digits)` or `BreathingArgs(technique: Literal["box", "478", "calm"])`. Invalid arguments are rejected *before* the tool runs and returned to the model as a tool error it can recover from.
+
+The emergency call is intentionally **not** a model tool: an irreversible action like a phone call only happens on the deterministic crisis path.
+
 ---
 
 ## 🏛️ System Architecture
@@ -190,10 +205,10 @@ flowchart TB
         G[Gradio chat interface<br/>sidebar · quick prompts · mood tracking]
     end
     subgraph BE[Backend]
-        F[FastAPI<br/>endpoints · routing · validation]
+        F[FastAPI<br/>typed request/response · structured errors]
     end
     subgraph AG[Agent Layer]
-        LG[LangGraph + LangChain tools<br/>ReAct loop · shared state]
+        LG[LangGraph StateGraph<br/>router · crisis · fixed · ReAct agent<br/>checkpointer per thread]
     end
     subgraph ML[Model Layer]
         MG[MedGemma 4B<br/>medical support]
@@ -213,8 +228,8 @@ flowchart TB
 | Layer | Technology | Responsibility |
 |---|---|---|
 | **Frontend** | Gradio | Chat interface, sidebar, quick prompts, live mood and risk panels |
-| **Backend** | FastAPI | Endpoints, topic filter, crisis pre-check, routing, validation, service integration |
-| **Agent layer** | LangGraph + LangChain | ReAct loop, tool selection, shared state |
+| **Backend** | FastAPI + Pydantic | `/ask` and `/health`, typed request/response models, structured error bodies |
+| **Agent layer** | LangGraph + LangChain | Router node, conditional edges, ReAct agent with typed tools, per-thread memory |
 | **Model layer** | MedGemma 4B, Llama 3.2 (Ollama) | Health responses and agent orchestration |
 | **External services** | Twilio, OpenStreetMap, Nominatim, Overpass | Emergency calls, clinic and pharmacy search |
 
@@ -248,16 +263,18 @@ flowchart TB
 
 ## 🚦 Safety Workflow
 
-Every message goes through a controlled routing system, not only prompt engineering.
+Every message goes through a controlled routing system, not only prompt engineering. The crisis check runs **first**, so a message with crisis language can never get the off-topic reply.
 
 ```mermaid
 flowchart TD
-    M[User message] --> F{Health-related?}
-    F -->|No| OFF[Polite refusal<br/>off-topic filter]
-    F -->|Yes| RISK{Risk level}
-    RISK -->|LOW| LOW[Supportive response<br/>+ coping exercise]
-    RISK -->|MEDIUM| MED[Supportive response<br/>+ crisis resources]
+    M[User message] --> RISK{Risk level}
     RISK -->|HIGH| HIGH[Emergency workflow<br/>hotlines + Twilio escalation]
+    RISK -->|MEDIUM| MED[Supportive response<br/>+ crisis resources]
+    RISK -->|LOW / NONE| INT{Known intent?}
+    INT -->|Yes| TOOL[Fixed tool answer]
+    INT -->|No| F{Health-related?}
+    F -->|No| OFF[Polite refusal<br/>+ emergency number]
+    F -->|Yes| AG[ReAct agent]
 ```
 
 | Risk level | Example signals | Agent behaviour |
@@ -284,7 +301,10 @@ The agent can also produce **handoff-style documentation** in the SOAP format:
 ## ✨ Features
 
 - 💬 **Supportive conversation** powered by MedGemma 4B
-- 🧠 **LangGraph ReAct agent** with Llama 3.2 for tool selection
+- 🧠 **LangGraph StateGraph**: deterministic router + conditional edges to crisis, fixed-response and ReAct agent nodes
+- 🔧 **Typed tool calling** with Pydantic argument schemas
+- 🗂️ **Per-conversation memory** via a LangGraph checkpointer keyed by `thread_id`
+- 📏 **Golden-dataset evaluation** of the router in CI, plus a live model benchmark
 - 🚦 **Three-level crisis detection** (LOW / MEDIUM / HIGH) with a dedicated workflow for each
 - 📞 **Emergency escalation** via Twilio (optional, disabled when not configured)
 - 🏥 **Clinic and 💊 pharmacy finder** using OpenStreetMap, Nominatim and Overpass
@@ -301,15 +321,20 @@ The agent can also produce **handoff-style documentation** in the SOAP format:
 ```
 safespace-ai/
 ├── backend/
-│   ├── main.py          # FastAPI app: /ask endpoint, topic filter, crisis pre-check, routing
-│   ├── ai_agent.py      # LangGraph ReAct agent (Llama 3.2) and tool definitions
+│   ├── main.py          # FastAPI app: typed /ask endpoint, structured errors
+│   ├── agent_graph.py   # LangGraph StateGraph: router, conditional edges, nodes, checkpointer
+│   ├── routing.py       # Deterministic classifier: crisis check, intents, topic filter
+│   ├── ai_agent.py      # ReAct agent (Llama 3.2) and tools with Pydantic schemas
 │   ├── tools.py         # MedGemma queries, Twilio call, risk detector, OSM search, SOAP notes
 │   └── config.py        # Settings loaded from environment variables (.env)
-├── tests/               # pytest suite: crisis detection, mood, health filter, API routing
+├── evals/
+│   ├── golden_dataset.jsonl   # Labelled prompts: expected route, risk, tool and args
+│   ├── harness.py       # Metrics, live ReAct benchmark, LLM-as-judge
+│   └── run_eval.py      # CLI: offline router eval / --live model benchmark
+├── tests/               # pytest: graph, tool schemas, ReAct loop, API, memory, eval gates
 ├── docs/
 │   └── SafeSpace_AI_Presentation.pptx   # Project presentation
 ├── gradio_frontend.py   # Gradio chat interface (port 7860)
-├── frontend.py          # Earlier Streamlit prototype of the chat interface
 ├── Dockerfile           # One container with Ollama, both models, backend and frontend
 ├── start.sh             # Starts Ollama, FastAPI and Gradio in order (used by Docker)
 ├── .env.example         # Template for optional Twilio settings
@@ -366,7 +391,7 @@ Open **http://localhost:7860**.
 uv run ruff check .   # lint
 uv run pytest         # tests
 ```
-The tests replace Twilio, Ollama and the location lookups with fakes, so they run offline and never place a real call.
+The tests replace Twilio, Ollama and the location lookups with fakes, so they run offline and never place a real call. The ReAct loop is tested with a scripted chat model, so tool selection, argument validation and observation run for real without Ollama.
 
 ### Share a public demo link
 [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/) creates a temporary public HTTPS link, with no account needed:
@@ -392,20 +417,58 @@ The first build downloads both models (~5 GB), so it takes a while.
 ### `POST /ask`
 Send a user message to the agent.
 
-**Request**
+**Request** (`AskRequest`)
 ```json
-{ "message": "I feel really anxious today" }
+{ "message": "I feel really anxious today", "thread_id": "optional-conversation-id" }
 ```
+Omit `thread_id` to start a new conversation; send the returned one back to continue it.
 
-**Response** (fields used by the frontend)
+**Response** (`AskResponse`)
 ```json
 {
   "response": "…supportive reply…",
-  "tool_called": "…name of the tool the agent used…",
+  "tool_called": "ask_mental_health_specialist",
+  "route": "agent",
   "mood": "anxious",
-  "risk": "LOW"
+  "risk": "LOW",
+  "thread_id": "3f9c…"
 }
 ```
+
+**Errors** always have the same shape (`ErrorResponse`), e.g. `422`:
+```json
+{ "error": { "code": "invalid_request", "message": "The request body is not valid.",
+             "details": [{ "field": "message", "problem": "Field required" }] } }
+```
+
+### `GET /health`
+Returns `{"status": "ok"}`.
+
+---
+
+## 📏 Evaluation
+
+`evals/golden_dataset.jsonl` holds labelled prompts with the expected **route**, **risk level**, and for open conversation the expected **tool** and **arguments**. Cases are split into:
+- **dev** — used while writing the routing rules
+- **holdout** — written afterwards and never tuned against, to measure generalization
+
+```bash
+uv run python evals/run_eval.py                       # router only, no model needed
+uv run python evals/run_eval.py --live --models llama3.2 qwen2.5:3b --judge llama3.2
+```
+
+**Offline** scores the router: routing accuracy, risk precision/recall per level, and crisis recall (did any crisis get missed?). It runs in CI, and `tests/test_evals.py` fails the build if the numbers drop below the current baseline.
+
+**Live** runs every agent case through the real ReAct agent for each Ollama model and records tool-selection accuracy, argument correctness, latency and token usage, aggregated per model with pandas. With `--judge`, a second model scores each answer on an empathy / safety / helpfulness rubric (LLM-as-judge).
+
+Current router results (67 cases):
+
+| Split | Cases | Routing accuracy | Crisis recall |
+|---|---|---|---|
+| dev | 53 | 100% | 1.00 |
+| holdout | 14 | 71% | 0.50 |
+
+The gap is the honest finding: keyword rules match the phrasings they were written for, but miss implicit or differently-worded crisis messages (e.g. *"I've written goodbye letters to my friends"*). That is why the off-topic reply always includes the emergency number, and why a learned risk classifier is the main next step.
 
 ---
 
@@ -459,8 +522,9 @@ LangGraph is the best fit here because the project needs **state, routing and sa
 | FastAPI backend | Keyword risk detection can miss context | User login |
 | Gradio interface | External APIs can fail | Database history |
 | Crisis detection | Privacy and compliance must be reviewed | Human review path |
-| Twilio emergency call | Session history is kept in memory for a single user | PDF export |
-| Automated pytest suite | Mood history is stored in a local JSON file | Per-user sessions in a database |
+| Twilio emergency call | Conversation memory is in-process (lost on restart) | PDF export |
+| Automated pytest suite + evals | Mood history is stored in a local JSON file | Durable checkpointer (SQLite/Postgres) |
+| Per-thread memory (checkpointer) | Keyword router: 71% on holdout phrasings | Learned risk classifier |
 | | No live therapist directory (the tool points to official services) | |
 | Clinic / pharmacy finder | | Stronger emotion model |
 | SOAP note output | | |
