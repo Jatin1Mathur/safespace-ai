@@ -9,6 +9,11 @@ import requests
 from config import EMERGENCY_CONTACT, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER
 from twilio.rest import Client
 
+# Seconds before a local model call is given up (then the caller falls back)
+OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "60"))
+MEDGEMMA_MODEL = os.getenv("MEDGEMMA_MODEL", "alibayram/medgemma:4b")
+_ollama = ollama.Client(timeout=OLLAMA_TIMEOUT)
+
 # ── Session memory file ──────────────────────────────────────────────────────
 MEMORY_FILE = os.path.join(os.path.dirname(__file__), "session_memory.json")
 
@@ -51,25 +56,24 @@ def get_current_location() -> dict:
 
 # ── 2. MedGemma therapist ────────────────────────────────────────────────────
 def query_medgemma(prompt: str) -> str:
-    system_prompt = """You are Dr. Emily Hartman, a warm and experienced clinical psychologist.
-    Respond to patients with:
-    1. Emotional attunement ("I can sense how difficult this must be...")
+    system_prompt = """You are SafeSpace, a warm, supportive AI assistant. You are not a
+    therapist or doctor, and you never claim to be one.
+    Respond with:
+    1. Emotional attunement ("That sounds really hard...")
     2. Gentle normalization ("Many people feel this way when...")
-    3. Practical guidance ("What sometimes helps is...")
+    3. Practical, low-risk guidance ("What sometimes helps is...")
     4. Strengths-focused support ("I notice how you're...")
     Key principles:
     - Never use brackets or labels
-    - Blend elements seamlessly
-    - Vary sentence structure
-    - Use natural transitions
-    - Mirror the user's language level
-    - Always keep the conversation going by asking open ended questions
+    - Use natural transitions and mirror the user's language level
+    - Keep the conversation going with an open question
+    - Suggest professional help when problems persist
     - Follow WHO safe messaging guidelines for sensitive topics
     - Never describe methods of self-harm, always provide hope and resources
     """
     try:
-        response = ollama.chat(
-            model='alibayram/medgemma:4b',
+        response = _ollama.chat(
+            model=MEDGEMMA_MODEL,
             messages=[{"role": "system", "content": system_prompt},
                       {"role": "user", "content": prompt}],
             options={'num_predict': 350, 'temperature': 0.7, 'top_p': 0.9}
@@ -102,9 +106,18 @@ def call_emergency() -> str:
 def assess_crisis_risk(message: str) -> dict:
     HIGH_RISK = ["kill myself", "end my life", "suicide", "suicidal",
                  "want to die", "no reason to live", "hurt myself",
-                 "harm myself", "self harm", "self-harm", "overdose"]
+                 "harm myself", "self harm", "self-harm", "overdose",
+                 # implicit phrasings
+                 "not wake up", "not waking up", "never wake up",
+                 "don't want to be alive", "don't want to live", "better off dead",
+                 "better off without me",
+                 # German
+                 "nicht mehr leben", "umbringen", "suizid", "selbstmord",
+                 "mir das leben nehmen"]
     MEDIUM_RISK = ["can't go on", "hopeless", "worthless", "nobody cares",
-                   "give up", "disappear", "burden", "trapped", "no way out"]
+                   "give up", "disappear", "burden", "trapped", "no way out",
+                   "point of anything", "no point in living", "pointless",
+                   "hoffnungslos", "keinen sinn", "kann nicht mehr"]
     LOW_RISK = ["sad", "depressed", "anxious", "stressed", "lonely",
                 "overwhelmed", "crying", "can't sleep", "panic"]
 
@@ -136,18 +149,26 @@ def detect_mood(message: str) -> str:
     return "neutral"
 
 
-def log_mood(mood: str):
+def log_mood(mood: str, thread_id: str | None = None):
     memory = load_memory()
     memory["mood_history"].append({
         "mood": mood,
+        "thread_id": thread_id,
         "timestamp": datetime.now().isoformat()
     })
     save_memory(memory)
 
 
-def get_mood_summary() -> str:
-    memory = load_memory()
-    history = memory.get("mood_history", [])
+def get_mood_history(thread_id: str | None = None) -> list:
+    """Mood entries, only for one conversation when a thread_id is given."""
+    history = load_memory().get("mood_history", [])
+    if thread_id is None:
+        return history
+    return [m for m in history if m.get("thread_id") == thread_id]
+
+
+def get_mood_summary(thread_id: str | None = None) -> str:
+    history = get_mood_history(thread_id)
     if not history:
         return "No mood history yet. Start chatting to track your emotional patterns."
     recent = history[-10:]
@@ -440,8 +461,8 @@ def generate_session_summary(messages: list) -> str:
         return "No conversation to summarize yet."
     convo = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in messages[-20:]])
     try:
-        response = ollama.chat(
-            model='alibayram/medgemma:4b',
+        response = _ollama.chat(
+            model=MEDGEMMA_MODEL,
             messages=[
                 {"role": "system", "content": "You are a clinical assistant. Summarize this therapy session in 3-5 sentences covering: main topics discussed, emotional state, and any recommendations made. Be concise and professional."},
                 {"role": "user", "content": f"Session transcript:\n{convo}"}
@@ -559,8 +580,8 @@ PLAN: (Recommended next steps, interventions, follow-up in 3-4 bullet points)
 
 Be concise, professional, and use clinical language."""
 
-        response = ollama.chat(
-            model='alibayram/medgemma:4b',
+        response = _ollama.chat(
+            model=MEDGEMMA_MODEL,
             messages=[{"role": "user", "content": soap_prompt}],
             options={'num_predict': 400, 'temperature': 0.3}
         )
