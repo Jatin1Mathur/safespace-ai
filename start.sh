@@ -12,4 +12,4 @@ until curl -sf http://127.0.0.1:8000/health > /dev/null; do sleep 1; done
 
 echo "Starting Gradio frontend..."
 cd /home/user/app
-exec python gradio_frontend.py
+GRADIO_HOST=0.0.0.0 exec python gradio_frontend.py

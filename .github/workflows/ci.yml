@@ -27,12 +27,23 @@ jobs:
       - name: Lint with ruff
         run: uv run ruff check .
 
-      # 5. Run the tests. External services (Ollama, Twilio, APIs) are
+      # 5. Security: static analysis (SAST) of our own code.
+      #    Fails on any medium or high severity finding.
+      - name: Security scan with bandit
+        run: uvx bandit -r backend gradio_frontend.py evals -ll
+
+      # 6. Security: check every locked dependency against known CVEs.
+      - name: Dependency vulnerability scan with pip-audit
+        run: |
+          uv export --frozen --no-dev --no-emit-project --no-hashes -o requirements-audit.txt
+          uvx pip-audit -r requirements-audit.txt --disable-pip --no-deps
+
+      # 7. Run the tests. External services (Ollama, Twilio, APIs) are
       #    replaced with fakes in the tests, so no models or keys are needed.
       - name: Run tests
         run: uv run pytest -v
 
-      # 6. Print the golden-dataset scores for the router (the regression
+      # 8. Print the golden-dataset scores for the router (the regression
       #    gates themselves run inside pytest in tests/test_evals.py)
       - name: Evaluation report
         run: uv run python evals/run_eval.py

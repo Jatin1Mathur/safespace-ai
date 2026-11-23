@@ -963,7 +963,8 @@ with gr.Blocks(title="SafeSpace AI") as demo:
 
 if __name__ == "__main__":
     demo.launch(
-        server_name="0.0.0.0",
+        # Local-only by default; the Docker image sets GRADIO_HOST=0.0.0.0.
+        server_name=os.getenv("GRADIO_HOST", "127.0.0.1"),
         server_port=7860,
         share=False,
         show_error=False,
