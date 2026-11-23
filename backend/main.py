@@ -1,6 +1,7 @@
 """FastAPI service in front of the SafeSpace LangGraph agent."""
 
 import logging
+import os
 import uuid
 from typing import Any
 
@@ -91,4 +92,5 @@ def ask(query: AskRequest) -> AskResponse:
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    # Local-only by default; set API_HOST=0.0.0.0 to expose the API on purpose.
+    uvicorn.run("main:app", host=os.getenv("API_HOST", "127.0.0.1"), port=8000, reload=True)

@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import time
 from datetime import datetime
@@ -10,6 +11,8 @@ from config import EMERGENCY_CONTACT, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWI
 from twilio.rest import Client
 
 # Seconds before a local model call is given up (then the caller falls back)
+logger = logging.getLogger(__name__)
+
 OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "60"))
 MEDGEMMA_MODEL = os.getenv("MEDGEMMA_MODEL", "alibayram/medgemma:4b")
 _ollama = ollama.Client(timeout=OLLAMA_TIMEOUT)
@@ -48,8 +51,9 @@ def get_current_location() -> dict:
                 res.get("city", "your area"))
         return {"lat": lat, "lng": lng, "city": city, "country": country,
                 "country_code": country_code, "display": f"{city}, {country}"}
-    except Exception:
-        pass
+    except Exception as exc:
+        # Geolocation is best-effort: log the failure, then use the default city.
+        logger.warning("IP geolocation failed, using default location: %s", exc)
     return {"lat": 50.3133, "lng": 11.9078, "city": "Hof",
             "country": "Germany", "country_code": "DE", "display": "Hof, Germany"}
 
